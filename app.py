@@ -195,7 +195,7 @@ if not df_banco.empty:
         )
 
     # --------------------------------------------------------------------------
-    # LÓGICA DE VARREDURA (VARREDURA + ATUALIZAÇÃO DO ÓRGÃO JULGADOR)
+    # LÓGICA DE VARREDURA
     # --------------------------------------------------------------------------
     if executar_varredura:
         headers = {
@@ -205,26 +205,31 @@ if not df_banco.empty:
         alertas = []
         alteracao_dados = False
 
-        df_pendentes = df_editado[df_editado["status"] == "Pendente"]
+        # Trabalha com uma cópia do DataFrame atual
+        df_trabalho = df_editado.copy()
 
-        if df_pendentes.empty:
+        indices_pendentes = df_trabalho[
+            df_trabalho["status"] == "Pendente"
+        ].index
+
+        if len(indices_pendentes) == 0:
             st.info("Não há processos com status 'Pendente' para consultar.")
         else:
             with st.spinner(
-                f"Consultando a API do TJES para {len(df_pendentes)} processo(s) pendente(s)..."
+                f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."
             ):
-                for idx, row in df_editado.iterrows():
-                    if row["status"] != "Pendente":
-                        continue
+                for idx in indices_pendentes:
+                    numero = str(df_trabalho.at[idx, "processo"]).strip()
+                    ppl = df_trabalho.at[idx, "nome_ppl"]
 
-                    numero = str(row["processo"])
-                    ppl = row["nome_ppl"]
+                    if not numero:
+                        continue
 
                     payload = {"query": {"match": {"numeroProcesso": numero}}}
 
                     try:
                         res = requests.post(
-                            URL_API, json=payload, headers=headers
+                            URL_API, json=payload, headers=headers, timeout=15
                         )
                         dados = res.json()
                         hits = dados.get("hits", {}).get("hits", [])
@@ -232,23 +237,24 @@ if not df_banco.empty:
                         if hits:
                             fonte = hits[0].get("_source", {})
 
-                            # Captura e atualiza o órgão julgador
-                            orgao_nome = (
-                                fonte.get("orgaoJulgador", {})
-                                .get("nome", "")
-                                .strip()
-                            )
-                            if (
-                                orgao_nome
-                                and df_editado.at[idx, "orgao_julgador"]
-                                != orgao_nome
-                            ):
-                                df_editado.at[idx, "orgao_julgador"] = (
+                            # Captura do nome do Órgão Julgador
+                            orgao_info = fonte.get("orgaoJulgador", {})
+                            orgao_nome = ""
+                            if isinstance(orgao_info, dict):
+                                orgao_nome = str(
+                                    orgao_info.get("nome", "")
+                                ).strip()
+
+                            if orgao_nome:
+                                df_trabalho.at[idx, "orgao_julgador"] = (
                                     orgao_nome
                                 )
                                 alteracao_dados = True
+                                st.toast(
+                                    f"✓ Processo {numero}: Órgão localizado ({orgao_nome})"
+                                )
 
-                            # Checa movimentos de soltura/baixa
+                            # Verifica movimentações impeditivas / desimpedimento
                             movs = fonte.get("movimentos", [])
                             for m in movs:
                                 cod = m.get("codigo")
@@ -266,15 +272,20 @@ if not df_banco.empty:
                                         "data": m.get("dataHora"),
                                     })
                                     break
+                        else:
+                            st.toast(
+                                f"⚠️ Processo {numero} não encontrado no banco público do TJES."
+                            )
+
                     except Exception as e:
                         st.error(f"Erro ao consultar o processo {numero}: {e}")
 
-            # Se houve atualização no órgão julgador, grava na planilha Google
+            # Atualiza o Google Sheets se houver modificações
             if alteracao_dados:
-                df_editado["processo"] = df_editado["processo"].apply(
+                df_trabalho["processo"] = df_trabalho["processo"].apply(
                     formatar_numero_processo
                 )
-                conn.update(data=df_editado)
+                conn.update(data=df_trabalho)
 
             if alertas:
                 st.balloons()
@@ -289,9 +300,7 @@ if not df_banco.empty:
                     * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no sistema BNMP 3.0 e alterar o status para **Analisado**.
                     """)
             else:
-                st.success(
-                    "Varredura concluída. Dados e órgãos julgadores atualizados com sucesso."
-                )
+                st.success("Varredura concluída com sucesso.")
 
             st.rerun()
 else:
