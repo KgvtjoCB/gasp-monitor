@@ -49,6 +49,7 @@ def formatar_numero_processo(valor):
 
 
 def carregar_dados():
+    # ttl=0 evita o cache prolongado do conector
     df = conn.read(ttl=0)
 
     colunas_necessarias = [
@@ -133,6 +134,7 @@ if submit:
                 [df_atual, novo_registro], ignore_index=True
             )
             conn.update(data=df_atualizado)
+            st.cache_data.clear()
             st.success("Processo cadastrado com sucesso na planilha.")
             st.rerun()
 
@@ -178,6 +180,7 @@ if not df_banco.empty:
                 formatar_numero_processo
             )
             conn.update(data=df_editado)
+            st.cache_data.clear()
             st.success("Alterações salvas com sucesso.")
             st.rerun()
 
@@ -194,7 +197,8 @@ if not df_banco.empty:
         alertas = []
         alteracao_dados = False
 
-        df_trabalho = df_editado.copy()
+        # Trabalha com cópia direta dos dados do banco
+        df_trabalho = df_banco.copy()
         indices_pendentes = df_trabalho[
             df_trabalho["status"] == "Pendente"
         ].index
@@ -214,57 +218,65 @@ if not df_banco.empty:
                     if not numero_limpo:
                         continue
 
-                    # Busca exata por termo em 20 dígitos numéricos puros
+                    # Estrutura idêntica à testada no PowerShell com sucesso
                     payload = {
                         "query": {"term": {"numeroProcesso": numero_limpo}}
                     }
-                    res = requests.post(
-                        URL_API, json=payload, headers=headers, timeout=15
-                    )
-                    dados = res.json()
-                    hits = dados.get("hits", {}).get("hits", [])
 
-                    if hits:
-                        fonte = hits[0].get("_source", {})
-
-                        orgao_info = fonte.get("orgaoJulgador", {})
-                        orgao_nome = ""
-                        if isinstance(orgao_info, dict):
-                            orgao_nome = str(
-                                orgao_info.get("nome", "")
-                            ).strip()
-
-                        if orgao_nome:
-                            df_trabalho.at[idx, "orgao_julgador"] = orgao_nome
-                            alteracao_dados = True
-                            st.toast(f"✓ Órgão encontrado: {orgao_nome}")
-
-                        movs = fonte.get("movimentos", [])
-                        for m in movs:
-                            cod = m.get("codigo")
-                            nome_mov = str(m.get("nome", "")).lower()
-
-                            if (cod in CODIGOS_ALVO) or any(
-                                t in nome_mov for t in TERMOS_ALVO
-                            ):
-                                alertas.append({
-                                    "ppl": ppl,
-                                    "proc": numero_limpo,
-                                    "orgao": orgao_nome or "Não informado",
-                                    "evento": m.get("nome"),
-                                    "data": m.get("dataHora"),
-                                })
-                                break
-                    else:
-                        st.toast(
-                            f"❌ Processo {numero_limpo} não retornou dados no TJES."
+                    try:
+                        res = requests.post(
+                            URL_API, json=payload, headers=headers, timeout=15
                         )
+                        dados = res.json()
+                        hits = dados.get("hits", {}).get("hits", [])
+
+                        if hits:
+                            fonte = hits[0].get("_source", {})
+
+                            orgao_info = fonte.get("orgaoJulgador", {})
+                            orgao_nome = ""
+                            if isinstance(orgao_info, dict):
+                                orgao_nome = str(
+                                    orgao_info.get("nome", "")
+                                ).strip()
+
+                            if orgao_nome:
+                                df_trabalho.at[idx, "orgao_julgador"] = (
+                                    orgao_nome
+                                )
+                                alteracao_dados = True
+                                st.toast(f"✓ Órgão localizado: {orgao_nome}")
+
+                            movs = fonte.get("movimentos", [])
+                            for m in movs:
+                                cod = m.get("codigo")
+                                nome_mov = str(m.get("nome", "")).lower()
+
+                                if (cod in CODIGOS_ALVO) or any(
+                                    t in nome_mov for t in TERMOS_ALVO
+                                ):
+                                    alertas.append({
+                                        "ppl": ppl,
+                                        "proc": numero_limpo,
+                                        "orgao": orgao_nome or "Não informado",
+                                        "evento": m.get("nome"),
+                                        "data": m.get("dataHora"),
+                                    })
+                                    break
+                        else:
+                            st.toast(
+                                f"❌ Processo {numero_limpo} não retornou hits na API."
+                            )
+
+                    except Exception as e:
+                        st.error(f"Erro de conexão com o Datajud: {e}")
 
             if alteracao_dados:
                 df_trabalho["processo"] = df_trabalho["processo"].apply(
                     formatar_numero_processo
                 )
                 conn.update(data=df_trabalho)
+                st.cache_data.clear()
 
             if alertas:
                 st.balloons()
@@ -279,7 +291,9 @@ if not df_banco.empty:
                     * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                     """)
             else:
-                st.success("Varredura concluída com sucesso.")
+                st.success(
+                    "Varredura concluída. Tabela e planilha atualizadas com sucesso."
+                )
 
             st.rerun()
 else:
