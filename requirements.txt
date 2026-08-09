@@ -1,0 +1,6 @@
+streamlit
+requests
+pandas
+st-gsheets-connection
+gspread
+oauth2client
