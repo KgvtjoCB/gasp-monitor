@@ -20,6 +20,7 @@ TERMOS_ALVO = [
     "revogação de prisão temporária",
     "revogação de prisão preventiva",
     "relaxamento de prisão",
+    "conclusão"
     "extinção da punibilidade",
 ]
 
