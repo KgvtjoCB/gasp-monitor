@@ -35,30 +35,20 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def formatar_numero_processo(valor):
-    """Trata a entrada convertendo qualquer tipo de dado para dígitos puros sem passar por conversão de float que altera os dígitos finais."""
+    """Garante apenas os dígitos do processo mantendo como string pura."""
     if pd.isna(valor) or valor == "" or valor is None:
         return ""
 
     val_str = str(valor).strip()
 
-    # Se vier em notação científica (ex: 5.035390262025808e+19), evita perda de precisão
+    # Se a planilha enviou como float com notação científica, avisa/limpa
     if "e+" in val_str.lower():
-        try:
-            parte_int = val_str.lower().split("e+")[0].replace(".", "")
-            exp = int(val_str.lower().split("e+")[1])
-            val_str = parte_int.ljust(exp + 1, "0")
-        except Exception:
-            pass
+        val_str = val_str.split(".")[0]
 
-    # Garante apenas os dígitos
-    num_limpo = re.sub(r"\D", "", val_str)
-
-    # Se tiver mais de 20 dígitos por erro de formatação, trunca nos 20 primeiros
-    return num_limpo[:20]
+    return re.sub(r"\D", "", val_str)[:20]
 
 
 def carregar_dados():
-    # Lê os dados da planilha
     df = conn.read(ttl=0)
 
     colunas_necessarias = [
@@ -74,12 +64,11 @@ def carregar_dados():
 
     df = df[colunas_necessarias]
 
-    # Aplica a formatação estrita antes de converter tudo em string
-    df["processo"] = df["processo"].apply(formatar_numero_processo)
-
+    # Força a conversão das colunas para string pura
     for col in df.columns:
         df[col] = df[col].astype(str).fillna("")
 
+    df["processo"] = df["processo"].apply(formatar_numero_processo)
     return df
 
 
@@ -134,6 +123,8 @@ if submit:
 
     if not num_limpo or not nome_formatado:
         st.error("Preencha o número do processo e o nome do preso.")
+    elif len(num_limpo) != 20:
+        st.error("O número do processo deve conter exatamente 20 dígitos.")
     else:
         df_atual = carregar_dados()
 
@@ -230,9 +221,16 @@ if not df_banco.empty:
                     )
                     ppl = df_execucao.at[idx, "nome_ppl"]
 
+                    # Alerta caso o número continue com zeros no final por formatação do Google Sheets
+                    if numero_limpo.endswith("0000"):
+                        st.error(
+                            f"⚠️ O processo '{numero_limpo}' teve os últimos dígitos zerados. Formate a Coluna A do Google Sheets como 'Texto Simples'."
+                        )
+                        continue
+
                     if not numero_limpo or len(numero_limpo) != 20:
                         st.toast(
-                            f"⚠️ Processo inválido ou corrompido: '{numero_limpo}'"
+                            f"⚠️ Processo com número inválido ignorado: '{numero_limpo}'"
                         )
                         continue
 
