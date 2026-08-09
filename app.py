@@ -50,6 +50,7 @@ def formatar_numero_processo(valor):
 
 
 def carregar_dados():
+    # Força a leitura direta da planilha sem cache
     df = conn.read(ttl=0)
 
     colunas_necessarias = [
@@ -72,18 +73,15 @@ def carregar_dados():
     return df
 
 
-def salvar_na_planilha(df_para_salvar):
-    """Garante a formatação limpa e força a gravação no Google Sheets convertendo em dicionário."""
-    df_para_salvar["processo"] = df_para_salvar["processo"].apply(
+def salvar_dados_planilha(df_salvar):
+    df_salvar["processo"] = df_salvar["processo"].apply(
         formatar_numero_processo
     )
-    for col in df_para_salvar.columns:
-        df_para_salvar[col] = df_para_salvar[col].fillna("").astype(str)
+    for col in df_salvar.columns:
+        df_salvar[col] = df_salvar[col].fillna("").astype(str)
 
-    # Converte para lista de dicionários para evitar erros de tipo no gsheets-connection
-    dados_dict = df_para_salvar.to_dict(orient="records")
-    conn.update(data=dados_dict)
-    st.cache_data.clear()
+    # Grava na planilha Google usando dicionário
+    conn.update(data=df_salvar.to_dict(orient="records"))
 
 
 # ------------------------------------------------------------------------------
@@ -147,7 +145,7 @@ if submit:
             df_atualizado = pd.concat(
                 [df_atual, novo_registro], ignore_index=True
             )
-            salvar_na_planilha(df_atualizado)
+            salvar_dados_planilha(df_atualizado)
             st.success("Processo cadastrado com sucesso na planilha.")
             st.rerun()
 
@@ -183,13 +181,14 @@ if not df_banco.empty:
         },
         use_container_width=True,
         num_rows="dynamic",
+        key="editor_tabela",
     )
 
     col_btn_salvar, col_btn_varredura = st.columns([1, 1])
 
     with col_btn_salvar:
         if st.button("💾 Salvar alterações na planilha"):
-            salvar_na_planilha(df_editado)
+            salvar_dados_planilha(df_editado)
             st.success("Alterações salvas com sucesso.")
             st.rerun()
 
@@ -206,9 +205,11 @@ if not df_banco.empty:
         alertas = []
         alteracao_dados = False
 
-        df_trabalho = df_editado.copy()
-        indices_pendentes = df_trabalho[
-            df_trabalho["status"] == "Pendente"
+        # Cria uma cópia limpa do DataFrame lido direto do banco
+        df_execucao = df_banco.copy()
+
+        indices_pendentes = df_execucao[
+            df_execucao["status"] == "Pendente"
         ].index
 
         if len(indices_pendentes) == 0:
@@ -219,21 +220,20 @@ if not df_banco.empty:
             ):
                 for idx in indices_pendentes:
                     numero_limpo = formatar_numero_processo(
-                        df_trabalho.at[idx, "processo"]
+                        df_execucao.at[idx, "processo"]
                     )
-                    ppl = df_trabalho.at[idx, "nome_ppl"]
+                    ppl = df_execucao.at[idx, "nome_ppl"]
 
                     if not numero_limpo:
                         continue
 
-                    raw_payload = json.dumps({
-                        "query": {"term": {"numeroProcesso": str(numero_limpo)}}
-                    })
+                    # Payload do termo exato (idêntico ao testado no PowerShell)
+                    payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                     try:
                         res = requests.post(
                             URL_API,
-                            data=raw_payload,
+                            json=payload,
                             headers=headers,
                             timeout=15,
                         )
@@ -251,7 +251,7 @@ if not df_banco.empty:
                                 ).strip()
 
                             if orgao_nome:
-                                df_trabalho.at[idx, "orgao_julgador"] = (
+                                df_execucao.at[idx, "orgao_julgador"] = (
                                     orgao_nome
                                 )
                                 alteracao_dados = True
@@ -279,10 +279,11 @@ if not df_banco.empty:
                             )
 
                     except Exception as e:
-                        st.error(f"Erro de conexão com o Datajud: {e}")
+                        st.error(f"Erro ao consultar o Datajud: {e}")
 
             if alteracao_dados:
-                salvar_na_planilha(df_trabalho)
+                salvar_dados_planilha(df_execucao)
+                st.success("Órgão julgador atualizado e salvo na planilha!")
 
             if alertas:
                 st.balloons()
@@ -296,11 +297,8 @@ if not df_banco.empty:
                     * **Data/Hora:** {a['data']}
                     * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                     """)
-            else:
-                st.success(
-                    "Varredura concluída. Tabela e planilha atualizadas com sucesso."
-                )
 
+            # Força a atualização da interface com os novos dados
             st.rerun()
 else:
     st.info("Nenhum processo cadastrado na planilha até o momento.")
