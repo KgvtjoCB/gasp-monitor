@@ -9,7 +9,7 @@ from streamlit_gsheets import GSheetsConnection
 # CONFIGURAÇÕES DO DATAJUD / CNJ
 # ==============================================================================
 URL_API = "https://api-publica.datajud.cnj.jus.br/api_publica_tjes/_search"
-API_KEY = "cjZwYXJ0bmVyOmJ1Z3N3YXJtLWtleQ=="
+API_KEY = "c2Vydmljb3M6Q05KX0RhdGFqdWRfU3Vwb3J0ZQ=="
 
 CODIGOS_ALVO = [12001, 12002]
 TERMOS_ALVO = [
