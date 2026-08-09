@@ -22,7 +22,6 @@ TERMOS_ALVO = [
     "extinção da punibilidade",
 ]
 
-# Configuração da página web
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
 )
@@ -31,12 +30,10 @@ st.markdown(
     "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
 )
 
-# Conexão com o Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def formatar_numero_processo(valor):
-    """Remove a notação científica e garante que o número do processo seja exibido como texto de dígitos puros."""
     if pd.isna(valor) or valor == "":
         return ""
 
@@ -51,10 +48,15 @@ def formatar_numero_processo(valor):
     return re.sub(r"\D", "", val_str)
 
 
+def formatar_cnj_mascara(num_limpo):
+    if len(num_limpo) == 20:
+        return f"{num_limpo[:7]}-{num_limpo[7:9]}.{num_limpo[9:13]}.{num_limpo[13]}.{num_limpo[14:16]}.{num_limpo[16:]}"
+    return num_limpo
+
+
 def carregar_dados():
     df = conn.read(ttl=0)
 
-    # Garante a existência das colunas necessárias
     colunas_necessarias = [
         "processo",
         "nome_ppl",
@@ -66,16 +68,12 @@ def carregar_dados():
         if col not in df.columns:
             df[col] = ""
 
-    # Filtra e mantém a ordem das colunas
     df = df[colunas_necessarias]
 
-    # Formata a coluna de processo para eliminar a notação científica
-    df["processo"] = df["processo"].apply(formatar_numero_processo)
-
-    # Converte demais colunas para texto para evitar incompatibilidade no editor
     for col in df.columns:
         df[col] = df[col].fillna("").astype(str)
 
+    df["processo"] = df["processo"].apply(formatar_numero_processo)
     return df
 
 
@@ -90,7 +88,7 @@ with st.form(key="form_cadastro", clear_on_submit=True):
     with col1:
         num_processo = st.text_input(
             "Número do processo (somente números):",
-            placeholder="Ex: 00012345620268080000",
+            placeholder="Ex: 50353902620258080048",
             max_chars=20,
         )
 
@@ -115,7 +113,7 @@ with st.form(key="form_cadastro", clear_on_submit=True):
     submit = st.form_submit_button("Cadastrar para monitoramento")
 
 if submit:
-    num_limpo = "".join(filter(str.isdigit, num_processo))
+    num_limpo = formatar_numero_processo(num_processo)
     nome_formatado = nome_ppl.strip().upper()
 
     if not num_limpo or not nome_formatado:
@@ -147,14 +145,14 @@ if submit:
 st.divider()
 
 # ------------------------------------------------------------------------------
-# PLANILHA DE DADOS CONSOLIDADOS (EDITÁVEL E COM EXCLUSÃO)
+# PLANILHA DE DADOS CONSOLIDADOS
 # ------------------------------------------------------------------------------
 df_banco = carregar_dados()
 st.subheader("📊 Planilha de dados consolidados")
 
 if not df_banco.empty:
     st.markdown(
-        "Você pode editar as informações diretamente na tabela. Para **excluir um registro**, selecione a linha desejada e pressione a tecla **Delete** do teclado (ou clique no ícone de lixeira da tabela) e depois em **Salvar alterações na planilha**."
+        "Edite as informações na tabela abaixo. Para **excluir**, clique na linha e pressione **Delete** do teclado e salve."
     )
 
     df_editado = st.data_editor(
@@ -186,7 +184,7 @@ if not df_banco.empty:
                 formatar_numero_processo
             )
             conn.update(data=df_editado)
-            st.success("Alterações e exclusões salvas com sucesso.")
+            st.success("Alterações salvas com sucesso.")
             st.rerun()
 
     with col_btn_varredura:
@@ -194,9 +192,6 @@ if not df_banco.empty:
             "🔍 Executar varredura dos pendentes no Datajud", type="primary"
         )
 
-    # --------------------------------------------------------------------------
-    # LÓGICA DE VARREDURA
-    # --------------------------------------------------------------------------
     if executar_varredura:
         headers = {
             "Authorization": f"APIKey {API_KEY}",
@@ -205,9 +200,7 @@ if not df_banco.empty:
         alertas = []
         alteracao_dados = False
 
-        # Trabalha com uma cópia do DataFrame atual
         df_trabalho = df_editado.copy()
-
         indices_pendentes = df_trabalho[
             df_trabalho["status"] == "Pendente"
         ].index
@@ -216,71 +209,75 @@ if not df_banco.empty:
             st.info("Não há processos com status 'Pendente' para consultar.")
         else:
             with st.spinner(
-                f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."
+                f"Consultando a API do TJES para {len(indices_pendentes)} processo(s)..."
             ):
                 for idx in indices_pendentes:
-                    numero = str(df_trabalho.at[idx, "processo"]).strip()
+                    numero_limpo = formatar_numero_processo(
+                        df_trabalho.at[idx, "processo"]
+                    )
                     ppl = df_trabalho.at[idx, "nome_ppl"]
 
-                    if not numero:
+                    if not numero_limpo:
                         continue
 
-                    payload = {"query": {"match": {"numeroProcesso": numero}}}
+                    # Busca 1: Números puros
+                    payload = {
+                        "query": {"match": {"numeroProcesso": numero_limpo}}
+                    }
+                    res = requests.post(
+                        URL_API, json=payload, headers=headers, timeout=15
+                    )
+                    dados = res.json()
+                    hits = dados.get("hits", {}).get("hits", [])
 
-                    try:
+                    # Busca 2: Fallback com máscara CNJ se a primeira falhar
+                    if not hits and len(numero_limpo) == 20:
+                        mascarado = formatar_cnj_mascara(numero_limpo)
+                        payload = {
+                            "query": {"match_phrase": {"numeroProcesso": mascarado}}
+                        }
                         res = requests.post(
                             URL_API, json=payload, headers=headers, timeout=15
                         )
                         dados = res.json()
                         hits = dados.get("hits", {}).get("hits", [])
 
-                        if hits:
-                            fonte = hits[0].get("_source", {})
+                    if hits:
+                        fonte = hits[0].get("_source", {})
 
-                            # Captura do nome do Órgão Julgador
-                            orgao_info = fonte.get("orgaoJulgador", {})
-                            orgao_nome = ""
-                            if isinstance(orgao_info, dict):
-                                orgao_nome = str(
-                                    orgao_info.get("nome", "")
-                                ).strip()
+                        orgao_info = fonte.get("orgaoJulgador", {})
+                        orgao_nome = ""
+                        if isinstance(orgao_info, dict):
+                            orgao_nome = str(
+                                orgao_info.get("nome", "")
+                            ).strip()
 
-                            if orgao_nome:
-                                df_trabalho.at[idx, "orgao_julgador"] = (
-                                    orgao_nome
-                                )
-                                alteracao_dados = True
-                                st.toast(
-                                    f"✓ Processo {numero}: Órgão localizado ({orgao_nome})"
-                                )
+                        if orgao_nome:
+                            df_trabalho.at[idx, "orgao_julgador"] = orgao_nome
+                            alteracao_dados = True
+                            st.toast(f"✓ Órgão encontrado: {orgao_nome}")
 
-                            # Verifica movimentações impeditivas / desimpedimento
-                            movs = fonte.get("movimentos", [])
-                            for m in movs:
-                                cod = m.get("codigo")
-                                nome_mov = str(m.get("nome", "")).lower()
+                        movs = fonte.get("movimentos", [])
+                        for m in movs:
+                            cod = m.get("codigo")
+                            nome_mov = str(m.get("nome", "")).lower()
 
-                                if (cod in CODIGOS_ALVO) or any(
-                                    t in nome_mov for t in TERMOS_ALVO
-                                ):
-                                    alertas.append({
-                                        "ppl": ppl,
-                                        "proc": numero,
-                                        "orgao": orgao_nome
-                                        or "Não informado",
-                                        "evento": m.get("nome"),
-                                        "data": m.get("dataHora"),
-                                    })
-                                    break
-                        else:
-                            st.toast(
-                                f"⚠️ Processo {numero} não encontrado no banco público do TJES."
-                            )
+                            if (cod in CODIGOS_ALVO) or any(
+                                t in nome_mov for t in TERMOS_ALVO
+                            ):
+                                alertas.append({
+                                    "ppl": ppl,
+                                    "proc": numero_limpo,
+                                    "orgao": orgao_nome or "Não informado",
+                                    "evento": m.get("nome"),
+                                    "data": m.get("dataHora"),
+                                })
+                                break
+                    else:
+                        st.toast(
+                            f"❌ Processo {numero_limpo} não retornou dados no TJES."
+                        )
 
-                    except Exception as e:
-                        st.error(f"Erro ao consultar o processo {numero}: {e}")
-
-            # Atualiza o Google Sheets se houver modificações
             if alteracao_dados:
                 df_trabalho["processo"] = df_trabalho["processo"].apply(
                     formatar_numero_processo
@@ -297,7 +294,7 @@ if not df_banco.empty:
                     * **Órgão julgador:** {a['orgao']}
                     * **Movimento:** {a['evento']}
                     * **Data/Hora:** {a['data']}
-                    * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no sistema BNMP 3.0 e alterar o status para **Analisado**.
+                    * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                     """)
             else:
                 st.success("Varredura concluída com sucesso.")
