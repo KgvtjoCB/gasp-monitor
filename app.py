@@ -54,18 +54,22 @@ with st.form(key="form_cadastro", clear_on_submit=True):
     with col1:
         num_processo = st.text_input(
             "Número do processo (somente números):",
-            placeholder="Ex: 50353902620258080048",
+            placeholder="Ex: 00012345620268080000",
             max_chars=20,
         )
 
     with col2:
         nome_ppl = st.text_input(
             "Nome da pessoa privada de liberdade (PPL):",
-            placeholder="Ex: Ray Soares Pinto",
+            placeholder="Ex: João da Silva",
         )
 
     with col3:
-        data_insercao = st.date_input("Data de inserção:", value=datetime.now())
+        data_insercao = st.date_input(
+            "Data de inserção:",
+            value=datetime.now(),
+            format="DD/MM/YYYY",
+        )
 
     with col4:
         status_inicial = st.selectbox(
