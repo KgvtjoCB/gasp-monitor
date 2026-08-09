@@ -12,7 +12,7 @@ from streamlit_gsheets import GSheetsConnection
 URL_API = "https://api-publica.datajud.cnj.jus.br/api_publica_tjes/_search"
 API_KEY = "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
 
-CODIGOS_ALVO = [12001, 12002]
+CODIGOS_ALVO = [12001, 12002, 26, 51]
 TERMOS_ALVO = [
     "alvará de soltura",
     "baixa de mandado de prisão",
@@ -20,7 +20,6 @@ TERMOS_ALVO = [
     "revogação de prisão temporária",
     "revogação de prisão preventiva",
     "relaxamento de prisão",
-    "conclusos"
     "extinção da punibilidade",
 ]
 
