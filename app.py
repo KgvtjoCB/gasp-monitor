@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import re
 import pandas as pd
 import requests
@@ -49,7 +50,6 @@ def formatar_numero_processo(valor):
 
 
 def carregar_dados():
-    # ttl=0 evita o cache prolongado do conector
     df = conn.read(ttl=0)
 
     colunas_necessarias = [
@@ -197,8 +197,7 @@ if not df_banco.empty:
         alertas = []
         alteracao_dados = False
 
-        # Trabalha com cópia direta dos dados do banco
-        df_trabalho = df_banco.copy()
+        df_trabalho = df_editado.copy()
         indices_pendentes = df_trabalho[
             df_trabalho["status"] == "Pendente"
         ].index
@@ -218,14 +217,14 @@ if not df_banco.empty:
                     if not numero_limpo:
                         continue
 
-                    # Estrutura idêntica à testada no PowerShell com sucesso
-                    payload = {
-                        "query": {"term": {"numeroProcesso": numero_limpo}}
-                    }
+                    # Estrutura JSON raw idêntica à enviada via Invoke-RestMethod do PowerShell
+                    raw_payload = json.dumps({
+                        "query": {"term": {"numeroProcesso": str(numero_limpo)}}
+                    })
 
                     try:
                         res = requests.post(
-                            URL_API, json=payload, headers=headers, timeout=15
+                            URL_API, data=raw_payload, headers=headers, timeout=15
                         )
                         dados = res.json()
                         hits = dados.get("hits", {}).get("hits", [])
