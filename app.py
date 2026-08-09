@@ -7,12 +7,11 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # ==============================================================================
-# CONFIGURAÇÕES DO DATAJUD / CNJ (TODAS AS MODALIDADES DE LIBERDADE)
+# CONFIGURAÇÕES DO DATAJUD / CNJ
 # ==============================================================================
 URL_API = "https://api-publica.datajud.cnj.jus.br/api_publica_tjes/_search"
 API_KEY = "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
 
-# Códigos TPU/CNJ oficiais de soltura, revogação, relaxamento e extinção
 CODIGOS_ALVO = [
     12001,  # Alvará de Soltura
     12002,  # Contramandado de Prisão
@@ -23,7 +22,6 @@ CODIGOS_ALVO = [
     183,    # Extinção da Punibilidade
 ]
 
-# Termos textuais abrangentes para capturar variações do TJES
 TERMOS_ALVO = [
     "alvará de soltura",
     "alvara de soltura",
@@ -53,7 +51,7 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==============================================================================
-# FUNÇÕES DE BANCO DE DADOS (PERMANECEM INTACTAS)
+# FUNÇÕES DE BANCO DE DADOS
 # ==============================================================================
 def formatar_numero_processo(valor):
     if pd.isna(valor) or valor is None:
@@ -128,6 +126,9 @@ def salvar_historico_baixas(df_hist_salvar):
 # ==============================================================================
 aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento Ativo", "🚨 Histórico de Baixas"])
 
+# ------------------------------------------------------------------------------
+# ABA 1: MONITORAMENTO ATIVO
+# ------------------------------------------------------------------------------
 with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
 
@@ -244,12 +245,16 @@ with aba_monitoramento:
             alteracao_dados = False
 
             df_execucao = df_banco.copy()
-            indices_pendentes = df_execucao[df_execucao["status"] == "Pendente"].index
+            
+            # FILTRAGEM RÍGIDA: Apenas processos com status exatamente 'Pendente'
+            indices_pendentes = df_execucao[
+                df_execucao["status"].str.strip().str.lower() == "pendente"
+            ].index
 
             if len(indices_pendentes) == 0:
                 st.info("Não há processos com status 'Pendente' para consultar.")
             else:
-                with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s)..."):
+                with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."):
                     for idx in indices_pendentes:
                         numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
                         ppl = df_execucao.at[idx, "nome_ppl"]
@@ -272,7 +277,7 @@ with aba_monitoramento:
                                 if isinstance(orgao_info, dict):
                                     orgao_nome = str(orgao_info.get("nome", "")).strip()
 
-                                if orgao_nome:
+                                if orgao_nome and df_execucao.at[idx, "orgao_julgador"] != orgao_nome:
                                     df_execucao.at[idx, "orgao_julgador"] = orgao_nome
                                     alteracao_dados = True
 
@@ -297,15 +302,24 @@ with aba_monitoramento:
                     salvar_dados_planilha(df_execucao)
 
                 if alertas:
-                    st.balloons()
-                    st.error("🚨 Atenção: desimpedimento detectado!")
+                    st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")
                     
-                    try:
-                        df_hist_atual = carregar_historico_baixas()
-                        novos_registros = []
-                        data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    df_hist_atual = carregar_historico_baixas()
+                    novos_registros = []
+                    data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-                        for a in alertas:
+                    for a in alertas:
+                        # VERIFICAÇÃO DE DUPLICIDADE: Só insere no histórico se não existir combinação idêntica de Processo + Evento
+                        duplicado = False
+                        if not df_hist_atual.empty:
+                            ja_existe = df_hist_atual[
+                                (df_hist_atual["processo"] == a['proc']) & 
+                                (df_hist_atual["evento_detectado"] == a['evento'])
+                            ]
+                            if len(ja_existe) > 0:
+                                duplicado = True
+
+                        if not duplicado:
                             novos_registros.append({
                                 "processo": a['proc'],
                                 "nome_ppl": a['ppl'],
@@ -314,14 +328,7 @@ with aba_monitoramento:
                                 "data_evento_tjes": a['data'],
                                 "data_registro_sistema": data_hora_atual
                             })
-                        
-                        df_novos_hist = pd.DataFrame(novos_registros)
-                        df_hist_atualizado = pd.concat([df_hist_atual, df_novos_hist], ignore_index=True)
-                        salvar_historico_baixas(df_hist_atualizado)
-                    except Exception as e:
-                        st.error(f"Aviso: Não foi possível gravar o histórico na nova aba. Erro: {e}")
 
-                    for a in alertas:
                         st.markdown(f"""
                         * **PPL:** {a['ppl']}
                         * **Processo:** `{a['proc']}`
@@ -330,13 +337,21 @@ with aba_monitoramento:
                         * **Data/Hora:** {a['data']}
                         * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                         """)
+
+                    if novos_registros:
+                        df_novos_hist = pd.DataFrame(novos_registros)
+                        df_hist_atualizado = pd.concat([df_hist_atual, df_novos_hist], ignore_index=True)
+                        salvar_historico_baixas(df_hist_atualizado)
                 else:
-                    st.success("Varredura concluída! A planilha foi atualizada silenciosamente.")
+                    st.success("Varredura concluída com sucesso. Nenhuma nova alteração identificada.")
 
                 st.rerun()
     else:
         st.info("Nenhum processo cadastrado na planilha até o momento.")
 
+# ------------------------------------------------------------------------------
+# ABA 2: HISTÓRICO DE BAIXAS
+# ------------------------------------------------------------------------------
 with aba_historico:
     st.subheader("📋 Registro de Baixas e Desimpedimentos Detectados")
     st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada durante as varreduras.")
@@ -357,5 +372,21 @@ with aba_historico:
             use_container_width=True,
             hide_index=True
         )
+        
+        st.divider()
+        
+        # Botão para apagar/limpar o histórico
+        with st.expander("🗑️ Opções de gerenciamento do histórico"):
+            st.warning("A ação abaixo irá apagar permanentemente todos os registros salvos na aba de Histórico de Baixas.")
+            
+            confirmar_exclusao = st.checkbox("Confirmar exclusão de todo o histórico")
+            if st.button("Apagar Histórico de Baixas", type="primary", disabled=not confirmar_exclusao):
+                df_vazio = pd.DataFrame(columns=[
+                    "processo", "nome_ppl", "orgao_julgador", 
+                    "evento_detectado", "data_evento_tjes", "data_registro_sistema"
+                ])
+                salvar_historico_baixas(df_vazio)
+                st.success("Histórico apagado com sucesso.")
+                st.rerun()
     else:
-        st.info("Nenhum histórico de baixa registrado até o momento. As detecções futuras aparecerão aqui.")
+        st.info("Nenhum histórico de baixa registrado até o momento.")
