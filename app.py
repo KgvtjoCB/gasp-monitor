@@ -48,12 +48,6 @@ def formatar_numero_processo(valor):
     return re.sub(r"\D", "", val_str)
 
 
-def formatar_cnj_mascara(num_limpo):
-    if len(num_limpo) == 20:
-        return f"{num_limpo[:7]}-{num_limpo[7:9]}.{num_limpo[9:13]}.{num_limpo[13]}.{num_limpo[14:16]}.{num_limpo[16:]}"
-    return num_limpo
-
-
 def carregar_dados():
     df = conn.read(ttl=0)
 
@@ -220,27 +214,15 @@ if not df_banco.empty:
                     if not numero_limpo:
                         continue
 
-                    # Busca 1: Números puros
+                    # Busca exata por termo em 20 dígitos numéricos puros
                     payload = {
-                        "query": {"match": {"numeroProcesso": numero_limpo}}
+                        "query": {"term": {"numeroProcesso": numero_limpo}}
                     }
                     res = requests.post(
                         URL_API, json=payload, headers=headers, timeout=15
                     )
                     dados = res.json()
                     hits = dados.get("hits", {}).get("hits", [])
-
-                    # Busca 2: Fallback com máscara CNJ se a primeira falhar
-                    if not hits and len(numero_limpo) == 20:
-                        mascarado = formatar_cnj_mascara(numero_limpo)
-                        payload = {
-                            "query": {"match_phrase": {"numeroProcesso": mascarado}}
-                        }
-                        res = requests.post(
-                            URL_API, json=payload, headers=headers, timeout=15
-                        )
-                        dados = res.json()
-                        hits = dados.get("hits", {}).get("hits", [])
 
                     if hits:
                         fonte = hits[0].get("_source", {})
