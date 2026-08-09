@@ -46,16 +46,13 @@ def formatar_numero_processo(valor):
     if val_str.lower() == "nan":
         return ""
 
-    # Remove o apóstrofo caso o Google Sheets envie ele na string
     if val_str.startswith("'"):
         val_str = val_str[1:]
 
-    # Remove qualquer coisa que não seja número
     return re.sub(r"\D", "", val_str)
 
 
 def carregar_dados():
-    # Lê a aba principal (padrão)
     df = conn.read(ttl=0, dtype=str)
 
     colunas_necessarias = [
@@ -85,11 +82,12 @@ def salvar_dados_planilha(df_salvar):
         df_salvar[col] = df_salvar[col].astype(str).fillna("")
         df_salvar[col] = df_salvar[col].replace("nan", "")
 
-    conn.update(data=df_salvar.to_dict(orient="records"))
+    # Força a atualização do cache e envia o DataFrame limpo
+    st.cache_data.clear()
+    conn.update(data=df_salvar)
 
 
 def carregar_historico():
-    """Carrega os dados da aba historico_baixas"""
     try:
         df_hist = conn.read(worksheet="historico_baixas", ttl=0, dtype=str)
         colunas_hist = [
@@ -110,7 +108,6 @@ def carregar_historico():
         df_hist["processo"] = df_hist["processo"].apply(formatar_numero_processo)
         return df_hist
     except Exception:
-        # Retorna um DataFrame vazio com as colunas corretas se a aba estiver vazia
         return pd.DataFrame(columns=[
             "processo", "nome_ppl", "orgao_julgador", 
             "evento_detectado", "data_evento_tjes", "data_registro_sistema"
@@ -118,13 +115,14 @@ def carregar_historico():
 
 
 def salvar_historico(df_hist_salvar):
-    """Salva os dados adicionados na aba historico_baixas"""
     df_hist_salvar["processo"] = df_hist_salvar["processo"].apply(formatar_numero_processo)
     for col in df_hist_salvar.columns:
         df_hist_salvar[col] = df_hist_salvar[col].astype(str).fillna("")
         df_hist_salvar[col] = df_hist_salvar[col].replace("nan", "")
 
-    conn.update(worksheet="historico_baixas", data=df_hist_salvar.to_dict(orient="records"))
+    # Força a atualização do cache e salva na aba correta
+    st.cache_data.clear()
+    conn.update(worksheet="historico_baixas", data=df_hist_salvar)
 
 
 # ==============================================================================
@@ -264,7 +262,6 @@ with aba_monitoramento:
                         if not numero_limpo or len(numero_limpo) != 20:
                             continue
 
-                        # Busca termo exato
                         payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                         try:
@@ -301,11 +298,9 @@ with aba_monitoramento:
                         except Exception as e:
                             st.error(f"Erro ao consultar o Datajud: {e}")
 
-                # Salva alterações na aba principal
                 if alteracao_dados:
                     salvar_dados_planilha(df_execucao)
 
-                # Se houver alertas, registra na aba historico_baixas
                 if alertas:
                     st.balloons()
                     st.error("🚨 Atenção: desimpedimentos detectados e registrados no Histórico!")
@@ -328,7 +323,6 @@ with aba_monitoramento:
                             "data_registro_sistema": agora_str
                         })
                     
-                    # Concatena e salva o novo histórico
                     df_novos_hist = pd.DataFrame(novos_registros_hist)
                     df_historico_atualizado = pd.concat([df_historico_atual, df_novos_hist], ignore_index=True)
                     salvar_historico(df_historico_atualizado)
@@ -351,7 +345,6 @@ with aba_historico:
     df_hist = carregar_historico()
     
     if not df_hist.empty:
-        # Exibe o histórico de forma limpa (somente leitura para evitar edições acidentais de auditoria)
         st.dataframe(
             df_hist,
             column_config={
