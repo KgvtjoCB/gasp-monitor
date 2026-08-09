@@ -70,6 +70,7 @@ def carregar_dados():
         "processo",
         "nome_ppl",
         "data_insercao",
+        "data_mandado",  # NOVO CAMPO: Data da restrição atual
         "orgao_julgador",
         "status",
     ]
@@ -133,7 +134,7 @@ with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
 
     with st.form(key="form_cadastro", clear_on_submit=True):
-        col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
 
         with col1:
             num_processo = st.text_input(
@@ -156,6 +157,14 @@ with aba_monitoramento:
             )
 
         with col4:
+            data_mandado = st.date_input(
+                "Data do mandado:",
+                value=datetime.now(),
+                format="DD/MM/YYYY",
+                help="Data em que o mandado de prisão atual foi expedido. Impede alertas falsos de alvarás antigos."
+            )
+
+        with col5:
             status_inicial = st.selectbox(
                 "Status do registro:", options=["Pendente", "Analisado"], index=0
             )
@@ -183,6 +192,7 @@ with aba_monitoramento:
                     "processo": str(num_limpo),
                     "nome_ppl": nome_formatado,
                     "data_insercao": data_insercao.strftime("%d/%m/%Y"),
+                    "data_mandado": data_mandado.strftime("%d/%m/%Y"),
                     "orgao_julgador": "Aguardando consulta",
                     "status": status_inicial,
                 }])
@@ -212,6 +222,7 @@ with aba_monitoramento:
                 ),
                 "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
                 "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
+                "data_mandado": st.column_config.TextColumn("DATA DO MANDADO"),
                 "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
                 "status": st.column_config.SelectboxColumn(
                     "STATUS",
@@ -283,16 +294,37 @@ with aba_monitoramento:
                                 for m in movs:
                                     cod = m.get("codigo")
                                     nome_mov = str(m.get("nome", "")).lower()
+                                    data_mov_iso = m.get("dataHora", "")
 
-                                    if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
-                                        alertas.append({
-                                            "ppl": ppl,
-                                            "proc": numero_limpo,
-                                            "orgao": orgao_nome or "Não informado",
-                                            "evento": m.get("nome"),
-                                            "data": m.get("dataHora"),
-                                        })
-                                        break
+                                    # =======================================================
+                                    # NOVA VALIDAÇÃO TEMPORAL: Impede falsos positivos antigos
+                                    # =======================================================
+                                    movimento_valido = True
+                                    try:
+                                        data_mandado_str = str(df_execucao.at[idx, "data_mandado"]).strip()
+                                        
+                                        if data_mandado_str and data_mov_iso:
+                                            # Converte a data informada na planilha (DD/MM/YYYY)
+                                            dt_mandado = datetime.strptime(data_mandado_str, "%d/%m/%Y").date()
+                                            # Converte a data do movimento retornado pelo CNJ (YYYY-MM-DD)
+                                            dt_movimento = datetime.strptime(data_mov_iso[:10], "%Y-%m-%d").date()
+                                            
+                                            # Se a soltura ocorreu ANTES da prisão atual, o evento não é um alvará válido
+                                            if dt_movimento < dt_mandado:
+                                                movimento_valido = False
+                                    except Exception:
+                                        pass  # Se falhar na conversão por campo vazio ou inválido, ignora a restrição (segurança)
+
+                                    if movimento_valido:
+                                        if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
+                                            alertas.append({
+                                                "ppl": ppl,
+                                                "proc": numero_limpo,
+                                                "orgao": orgao_nome or "Não informado",
+                                                "evento": m.get("nome"),
+                                                "data": m.get("dataHora"),
+                                            })
+                                            break
                         except Exception as e:
                             st.error(f"Erro ao consultar o Datajud: {e}")
 
@@ -347,7 +379,7 @@ with aba_monitoramento:
         st.info("Nenhum processo cadastrado na planilha até o momento.")
 
 # ------------------------------------------------------------------------------
-# ABA 2: HISTÓRICO DE BAIXAS (Com edição e remoção individual)
+# ABA 2: HISTÓRICO DE BAIXAS
 # ------------------------------------------------------------------------------
 with aba_historico:
     st.subheader("📋 Registro de baixas detectadas")
@@ -356,7 +388,6 @@ with aba_historico:
     df_historico_view = carregar_historico_baixas()
     
     if not df_historico_view.empty:
-        # Tabela editável para permitir exclusão direta por Delete
         df_historico_editado = st.data_editor(
             df_historico_view,
             column_config={
@@ -382,7 +413,6 @@ with aba_historico:
                 
         st.divider()
         
-        # Opção alternativa: Remoção via menu suspenso (mais rápida se preferir)
         with st.expander("🗑️ Excluir um registro específico por seleção"):
             opcoes_exclusao = [
                 f"{row['nome_ppl']} — Processo: {row['processo']} ({row['evento_detectado']})"
