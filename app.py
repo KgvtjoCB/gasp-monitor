@@ -36,11 +36,21 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
     df = conn.read(ttl=0)
+
+    # Garante a existência das colunas necessárias
     colunas_necessarias = ["processo", "nome_ppl", "data_insercao", "status"]
     for col in colunas_necessarias:
         if col not in df.columns:
-            df[col] = None
-    return df[colunas_necessarias]
+            df[col] = ""
+
+    # Filtra e mantém a ordem das colunas
+    df = df[colunas_necessarias]
+
+    # Converte todas as colunas para texto para evitar incompatibilidade no st.data_editor
+    for col in df.columns:
+        df[col] = df[col].fillna("").astype(str)
+
+    return df
 
 
 # ------------------------------------------------------------------------------
