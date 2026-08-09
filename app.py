@@ -43,7 +43,7 @@ TERMOS_ALVO = [
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
 )
-st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas")
+st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas (BETA)")
 st.markdown(
     "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
 )
@@ -124,7 +124,7 @@ def salvar_historico_baixas(df_hist_salvar):
 # ==============================================================================
 # DESIGN DA PÁGINA (ABAS)
 # ==============================================================================
-aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento Ativo", "🚨 Histórico de Baixas"])
+aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento ativo", "🚨 Histórico de baixas"])
 
 # ------------------------------------------------------------------------------
 # ABA 1: MONITORAMENTO ATIVO
@@ -233,7 +233,7 @@ with aba_monitoramento:
 
         with col_btn_varredura:
             executar_varredura = st.button(
-                "🔍 Executar varredura dos pendentes no Datajud", type="primary"
+                "🔍 Executar varredura", type="primary"
             )
 
         if executar_varredura:
@@ -245,8 +245,6 @@ with aba_monitoramento:
             alteracao_dados = False
 
             df_execucao = df_banco.copy()
-            
-            # FILTRAGEM RÍGIDA: Apenas processos com status exatamente 'Pendente'
             indices_pendentes = df_execucao[
                 df_execucao["status"].str.strip().str.lower() == "pendente"
             ].index
@@ -309,7 +307,6 @@ with aba_monitoramento:
                     data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
                     for a in alertas:
-                        # VERIFICAÇÃO DE DUPLICIDADE: Só insere no histórico se não existir combinação idêntica de Processo + Evento
                         duplicado = False
                         if not df_hist_atual.empty:
                             ja_existe = df_hist_atual[
@@ -350,43 +347,58 @@ with aba_monitoramento:
         st.info("Nenhum processo cadastrado na planilha até o momento.")
 
 # ------------------------------------------------------------------------------
-# ABA 2: HISTÓRICO DE BAIXAS
+# ABA 2: HISTÓRICO DE BAIXAS (Com edição e remoção individual)
 # ------------------------------------------------------------------------------
 with aba_historico:
-    st.subheader("📋 Registro de Baixas e Desimpedimentos Detectados")
-    st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada durante as varreduras.")
+    st.subheader("📋 Registro de baixas detectadas")
+    st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada. Para **excluir um registro**, selecione a linha na tabela, pressione **Delete** no teclado e clique em **Salvar alterações**.")
     
     df_historico_view = carregar_historico_baixas()
     
     if not df_historico_view.empty:
-        st.dataframe(
+        # Tabela editável para permitir exclusão direta por Delete
+        df_historico_editado = st.data_editor(
             df_historico_view,
             column_config={
-                "processo": "PROCESSO",
-                "nome_ppl": "NOME DA PPL",
-                "orgao_julgador": "ÓRGÃO JULGADOR",
-                "evento_detectado": "EVENTO DETECTADO (TJES)",
-                "data_evento_tjes": "DATA/HORA DO EVENTO",
-                "data_registro_sistema": "DATA DE VERIFICAÇÃO"
+                "processo": st.column_config.TextColumn("PROCESSO"),
+                "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
+                "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
+                "evento_detectado": st.column_config.TextColumn("EVENTO DETECTADO (TJES)"),
+                "data_evento_tjes": st.column_config.TextColumn("DATA/HORA DO EVENTO"),
+                "data_registro_sistema": st.column_config.TextColumn("DATA DE VERIFICAÇÃO")
             },
             use_container_width=True,
-            hide_index=True
+            num_rows="dynamic",
+            key="editor_historico"
         )
         
+        col_hist_1, col_hist_2 = st.columns([1, 1])
+        
+        with col_hist_1:
+            if st.button("💾 Salvar alterações no Histórico"):
+                salvar_historico_baixas(df_historico_editado)
+                st.success("Histórico atualizado com sucesso.")
+                st.rerun()
+                
         st.divider()
         
-        # Botão para apagar/limpar o histórico
-        with st.expander("🗑️ Opções de gerenciamento do histórico"):
-            st.warning("A ação abaixo irá apagar permanentemente todos os registros salvos na aba de Histórico de Baixas.")
+        # Opção alternativa: Remoção via menu suspenso (mais rápida se preferir)
+        with st.expander("🗑️ Excluir um registro específico por seleção"):
+            opcoes_exclusao = [
+                f"{row['nome_ppl']} — Processo: {row['processo']} ({row['evento_detectado']})"
+                for _, row in df_historico_view.iterrows()
+            ]
             
-            confirmar_exclusao = st.checkbox("Confirmar exclusão de todo o histórico")
-            if st.button("Apagar Histórico de Baixas", type="primary", disabled=not confirmar_exclusao):
-                df_vazio = pd.DataFrame(columns=[
-                    "processo", "nome_ppl", "orgao_julgador", 
-                    "evento_detectado", "data_evento_tjes", "data_registro_sistema"
-                ])
-                salvar_historico_baixas(df_vazio)
-                st.success("Histórico apagado com sucesso.")
+            registro_selecionado = st.selectbox(
+                "Selecione o registro que deseja apagar:",
+                options=opcoes_exclusao
+            )
+            
+            if st.button("Remover registro selecionado", type="primary"):
+                idx_para_remover = opcoes_exclusao.index(registro_selecionado)
+                df_historico_filtrado = df_historico_view.drop(index=idx_para_remover).reset_index(drop=True)
+                salvar_historico_baixas(df_historico_filtrado)
+                st.success("Registro removido do histórico com sucesso.")
                 st.rerun()
     else:
         st.info("Nenhum histórico de baixa registrado até o momento.")
