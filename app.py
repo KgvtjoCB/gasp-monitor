@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 import pandas as pd
 import requests
 import streamlit as st
@@ -34,6 +35,24 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
+def formatar_numero_processo(valor):
+    """Remove a notação científica e garante que o número do processo seja exibido como texto de dígitos puros."""
+    if pd.isna(valor) or valor == "":
+        return ""
+
+    val_str = str(valor).strip()
+
+    # Se estiver em notação científica (ex: 2.00078e+19), converte para int grande e depois para str
+    if "e+" in val_str.lower():
+        try:
+            val_str = f"{int(float(val_str))}"
+        except ValueError:
+            pass
+
+    # Mantém apenas os dígitos numéricos
+    return re.sub(r"\D", "", val_str)
+
+
 def carregar_dados():
     df = conn.read(ttl=0)
 
@@ -46,7 +65,10 @@ def carregar_dados():
     # Filtra e mantém a ordem das colunas
     df = df[colunas_necessarias]
 
-    # Converte todas as colunas para texto para evitar incompatibilidade no st.data_editor
+    # Formata a coluna de processo para eliminar a notação científica
+    df["processo"] = df["processo"].apply(formatar_numero_processo)
+
+    # Converte demais colunas para texto para evitar incompatibilidade
     for col in df.columns:
         df[col] = df[col].fillna("").astype(str)
 
@@ -120,20 +142,24 @@ if submit:
 st.divider()
 
 # ------------------------------------------------------------------------------
-# PLANILHA DE DADOS CONSOLIDADOS (EDITÁVEL)
+# PLANILHA DE DADOS CONSOLIDADOS (EDITÁVEL E COM EXCLUSÃO)
 # ------------------------------------------------------------------------------
 df_banco = carregar_dados()
 st.subheader("📊 Planilha de dados consolidados")
 
 if not df_banco.empty:
     st.markdown(
-        "Você pode editar o status ou as informações diretamente na tabela abaixo e clicar no botão **Salvar alterações na planilha**."
+        "Você pode editar as informações diretamente na tabela. Para **excluir um registro**, selecione a linha desejada e pressione a tecla **Delete** do teclado (ou clique no ícone de lixeira da tabela) e depois em **Salvar alterações na planilha**."
     )
 
     df_editado = st.data_editor(
         df_banco,
         column_config={
-            "processo": st.column_config.TextColumn("PROCESSO"),
+            "processo": st.column_config.TextColumn(
+                "PROCESSO",
+                help="Número do processo (apenas dígitos)",
+                validate=r"^\d*$",
+            ),
             "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
             "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
             "status": st.column_config.SelectboxColumn(
@@ -143,15 +169,19 @@ if not df_banco.empty:
             ),
         },
         use_container_width=True,
-        num_rows="dynamic",
+        num_rows="dynamic",  # Permite excluir e adicionar linhas na própria tabela
     )
 
     col_btn_salvar, col_btn_varredura = st.columns([1, 1])
 
     with col_btn_salvar:
         if st.button("💾 Salvar alterações na planilha"):
+            # Garante a formatação limpa antes de atualizar a planilha Google
+            df_editado["processo"] = df_editado["processo"].apply(
+                formatar_numero_processo
+            )
             conn.update(data=df_editado)
-            st.success("Alterações salvas com sucesso.")
+            st.success("Alterações e exclusões salvas com sucesso.")
             st.rerun()
 
     with col_btn_varredura:
