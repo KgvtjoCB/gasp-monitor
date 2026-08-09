@@ -42,14 +42,12 @@ def formatar_numero_processo(valor):
 
     val_str = str(valor).strip()
 
-    # Se estiver em notação científica (ex: 2.00078e+19), converte para int grande e depois para str
     if "e+" in val_str.lower():
         try:
             val_str = f"{int(float(val_str))}"
         except ValueError:
             pass
 
-    # Mantém apenas os dígitos numéricos
     return re.sub(r"\D", "", val_str)
 
 
@@ -57,7 +55,13 @@ def carregar_dados():
     df = conn.read(ttl=0)
 
     # Garante a existência das colunas necessárias
-    colunas_necessarias = ["processo", "nome_ppl", "data_insercao", "status"]
+    colunas_necessarias = [
+        "processo",
+        "nome_ppl",
+        "data_insercao",
+        "orgao_julgador",
+        "status",
+    ]
     for col in colunas_necessarias:
         if col not in df.columns:
             df[col] = ""
@@ -68,7 +72,7 @@ def carregar_dados():
     # Formata a coluna de processo para eliminar a notação científica
     df["processo"] = df["processo"].apply(formatar_numero_processo)
 
-    # Converte demais colunas para texto para evitar incompatibilidade
+    # Converte demais colunas para texto para evitar incompatibilidade no editor
     for col in df.columns:
         df[col] = df[col].fillna("").astype(str)
 
@@ -129,6 +133,7 @@ if submit:
                 "processo": str(num_limpo),
                 "nome_ppl": nome_formatado,
                 "data_insercao": data_insercao.strftime("%d/%m/%Y"),
+                "orgao_julgador": "Aguardando consulta",
                 "status": status_inicial,
             }])
 
@@ -162,6 +167,7 @@ if not df_banco.empty:
             ),
             "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
             "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
+            "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
             "status": st.column_config.SelectboxColumn(
                 "STATUS",
                 options=["Pendente", "Analisado"],
@@ -169,14 +175,13 @@ if not df_banco.empty:
             ),
         },
         use_container_width=True,
-        num_rows="dynamic",  # Permite excluir e adicionar linhas na própria tabela
+        num_rows="dynamic",
     )
 
     col_btn_salvar, col_btn_varredura = st.columns([1, 1])
 
     with col_btn_salvar:
         if st.button("💾 Salvar alterações na planilha"):
-            # Garante a formatação limpa antes de atualizar a planilha Google
             df_editado["processo"] = df_editado["processo"].apply(
                 formatar_numero_processo
             )
@@ -190,7 +195,7 @@ if not df_banco.empty:
         )
 
     # --------------------------------------------------------------------------
-    # LÓGICA DE VARREDURA (APENAS REGISTROS "PENDENTE")
+    # LÓGICA DE VARREDURA (VARREDURA + ATUALIZAÇÃO DO ÓRGÃO JULGADOR)
     # --------------------------------------------------------------------------
     if executar_varredura:
         headers = {
@@ -198,6 +203,7 @@ if not df_banco.empty:
             "Content-Type": "application/json",
         }
         alertas = []
+        alteracao_dados = False
 
         df_pendentes = df_editado[df_editado["status"] == "Pendente"]
 
@@ -207,7 +213,10 @@ if not df_banco.empty:
             with st.spinner(
                 f"Consultando a API do TJES para {len(df_pendentes)} processo(s) pendente(s)..."
             ):
-                for _, row in df_pendentes.iterrows():
+                for idx, row in df_editado.iterrows():
+                    if row["status"] != "Pendente":
+                        continue
+
                     numero = str(row["processo"])
                     ppl = row["nome_ppl"]
 
@@ -221,7 +230,26 @@ if not df_banco.empty:
                         hits = dados.get("hits", {}).get("hits", [])
 
                         if hits:
-                            movs = hits[0]["_source"].get("movimentos", [])
+                            fonte = hits[0].get("_source", {})
+
+                            # Captura e atualiza o órgão julgador
+                            orgao_nome = (
+                                fonte.get("orgaoJulgador", {})
+                                .get("nome", "")
+                                .strip()
+                            )
+                            if (
+                                orgao_nome
+                                and df_editado.at[idx, "orgao_julgador"]
+                                != orgao_nome
+                            ):
+                                df_editado.at[idx, "orgao_julgador"] = (
+                                    orgao_nome
+                                )
+                                alteracao_dados = True
+
+                            # Checa movimentos de soltura/baixa
+                            movs = fonte.get("movimentos", [])
                             for m in movs:
                                 cod = m.get("codigo")
                                 nome_mov = str(m.get("nome", "")).lower()
@@ -232,12 +260,21 @@ if not df_banco.empty:
                                     alertas.append({
                                         "ppl": ppl,
                                         "proc": numero,
+                                        "orgao": orgao_nome
+                                        or "Não informado",
                                         "evento": m.get("nome"),
                                         "data": m.get("dataHora"),
                                     })
                                     break
                     except Exception as e:
                         st.error(f"Erro ao consultar o processo {numero}: {e}")
+
+            # Se houve atualização no órgão julgador, grava na planilha Google
+            if alteracao_dados:
+                df_editado["processo"] = df_editado["processo"].apply(
+                    formatar_numero_processo
+                )
+                conn.update(data=df_editado)
 
             if alertas:
                 st.balloons()
@@ -246,13 +283,16 @@ if not df_banco.empty:
                     st.markdown(f"""
                     * **PPL:** {a['ppl']}
                     * **Processo:** `{a['proc']}`
+                    * **Órgão julgador:** {a['orgao']}
                     * **Movimento:** {a['evento']}
                     * **Data/Hora:** {a['data']}
                     * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no sistema BNMP 3.0 e alterar o status para **Analisado**.
                     """)
             else:
                 st.success(
-                    "Nenhuma alteração de soltura ou baixa detectada nos processos pendentes."
+                    "Varredura concluída. Dados e órgãos julgadores atualizados com sucesso."
                 )
+
+            st.rerun()
 else:
     st.info("Nenhum processo cadastrado na planilha até o momento.")
