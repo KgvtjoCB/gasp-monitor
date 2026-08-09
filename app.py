@@ -35,24 +35,30 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def formatar_numero_processo(valor):
-    """Garante a integridade do número do processo impedindo conversões de notação científica."""
-    if pd.isna(valor) or valor == "":
+    """Trata a entrada convertendo qualquer tipo de dado para dígitos puros sem passar por conversão de float que altera os dígitos finais."""
+    if pd.isna(valor) or valor == "" or valor is None:
         return ""
 
     val_str = str(valor).strip()
 
-    # Trata caso o pandas leia como notação científica (ex: 5.035390262025808e+19)
+    # Se vier em notação científica (ex: 5.035390262025808e+19), evita perda de precisão
     if "e+" in val_str.lower():
         try:
-            val_str = f"{int(float(val_str))}"
-        except ValueError:
+            parte_int = val_str.lower().split("e+")[0].replace(".", "")
+            exp = int(val_str.lower().split("e+")[1])
+            val_str = parte_int.ljust(exp + 1, "0")
+        except Exception:
             pass
 
-    return re.sub(r"\D", "", val_str)
+    # Garante apenas os dígitos
+    num_limpo = re.sub(r"\D", "", val_str)
+
+    # Se tiver mais de 20 dígitos por erro de formatação, trunca nos 20 primeiros
+    return num_limpo[:20]
 
 
 def carregar_dados():
-    # Lê a planilha forçando o conector a ignorar o cache
+    # Lê os dados da planilha
     df = conn.read(ttl=0)
 
     colunas_necessarias = [
@@ -68,11 +74,12 @@ def carregar_dados():
 
     df = df[colunas_necessarias]
 
-    # Força tipo string pura em todas as colunas
+    # Aplica a formatação estrita antes de converter tudo em string
+    df["processo"] = df["processo"].apply(formatar_numero_processo)
+
     for col in df.columns:
         df[col] = df[col].astype(str).fillna("")
 
-    df["processo"] = df["processo"].apply(formatar_numero_processo)
     return df
 
 
@@ -169,8 +176,8 @@ if not df_banco.empty:
         column_config={
             "processo": st.column_config.TextColumn(
                 "PROCESSO",
-                help="Número do processo (apenas dígitos)",
-                validate=r"^\d*$",
+                help="Número do processo (20 dígitos)",
+                validate=r"^\d{20}$",
             ),
             "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
             "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
@@ -223,10 +230,12 @@ if not df_banco.empty:
                     )
                     ppl = df_execucao.at[idx, "nome_ppl"]
 
-                    if not numero_limpo:
+                    if not numero_limpo or len(numero_limpo) != 20:
+                        st.toast(
+                            f"⚠️ Processo inválido ou corrompido: '{numero_limpo}'"
+                        )
                         continue
 
-                    # Executa a busca exatamente como testado no PowerShell
                     payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                     try:
