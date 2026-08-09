@@ -72,6 +72,20 @@ def carregar_dados():
     return df
 
 
+def salvar_na_planilha(df_para_salvar):
+    """Garante a formatação limpa e força a gravação no Google Sheets convertendo em dicionário."""
+    df_para_salvar["processo"] = df_para_salvar["processo"].apply(
+        formatar_numero_processo
+    )
+    for col in df_para_salvar.columns:
+        df_para_salvar[col] = df_para_salvar[col].fillna("").astype(str)
+
+    # Converte para lista de dicionários para evitar erros de tipo no gsheets-connection
+    dados_dict = df_para_salvar.to_dict(orient="records")
+    conn.update(data=dados_dict)
+    st.cache_data.clear()
+
+
 # ------------------------------------------------------------------------------
 # FORMULÁRIO DE CADASTRO
 # ------------------------------------------------------------------------------
@@ -133,8 +147,7 @@ if submit:
             df_atualizado = pd.concat(
                 [df_atual, novo_registro], ignore_index=True
             )
-            conn.update(data=df_atualizado)
-            st.cache_data.clear()
+            salvar_na_planilha(df_atualizado)
             st.success("Processo cadastrado com sucesso na planilha.")
             st.rerun()
 
@@ -176,11 +189,7 @@ if not df_banco.empty:
 
     with col_btn_salvar:
         if st.button("💾 Salvar alterações na planilha"):
-            df_editado["processo"] = df_editado["processo"].apply(
-                formatar_numero_processo
-            )
-            conn.update(data=df_editado)
-            st.cache_data.clear()
+            salvar_na_planilha(df_editado)
             st.success("Alterações salvas com sucesso.")
             st.rerun()
 
@@ -217,14 +226,16 @@ if not df_banco.empty:
                     if not numero_limpo:
                         continue
 
-                    # Estrutura JSON raw idêntica à enviada via Invoke-RestMethod do PowerShell
                     raw_payload = json.dumps({
                         "query": {"term": {"numeroProcesso": str(numero_limpo)}}
                     })
 
                     try:
                         res = requests.post(
-                            URL_API, data=raw_payload, headers=headers, timeout=15
+                            URL_API,
+                            data=raw_payload,
+                            headers=headers,
+                            timeout=15,
                         )
                         dados = res.json()
                         hits = dados.get("hits", {}).get("hits", [])
@@ -271,11 +282,7 @@ if not df_banco.empty:
                         st.error(f"Erro de conexão com o Datajud: {e}")
 
             if alteracao_dados:
-                df_trabalho["processo"] = df_trabalho["processo"].apply(
-                    formatar_numero_processo
-                )
-                conn.update(data=df_trabalho)
-                st.cache_data.clear()
+                salvar_na_planilha(df_trabalho)
 
             if alertas:
                 st.balloons()
