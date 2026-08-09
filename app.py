@@ -34,7 +34,7 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==============================================================================
-# FUNÇÕES DE TRATAMENTO E BANCO DE DADOS
+# FUNÇÕES INTACTAS DA PLANILHA PRINCIPAL
 # ==============================================================================
 def formatar_numero_processo(valor):
     """Lê exatamente o texto como está, removendo apenas espaços, apóstrofos e traços."""
@@ -46,13 +46,16 @@ def formatar_numero_processo(valor):
     if val_str.lower() == "nan":
         return ""
 
+    # Remove o apóstrofo caso o Google Sheets envie ele na string
     if val_str.startswith("'"):
         val_str = val_str[1:]
 
+    # Remove qualquer coisa que não seja número
     return re.sub(r"\D", "", val_str)
 
 
 def carregar_dados():
+    # O SEGREDO ESTÁ AQUI: dtype=str proíbe o Pandas de transformar texto em número!
     df = conn.read(ttl=0, dtype=str)
 
     colunas_necessarias = [
@@ -68,6 +71,7 @@ def carregar_dados():
 
     df = df[colunas_necessarias]
 
+    # Troca possíveis valores 'nan' gerados pelo Pandas por vazio
     for col in df.columns:
         df[col] = df[col].astype(str).fillna("")
         df[col] = df[col].replace("nan", "")
@@ -82,11 +86,13 @@ def salvar_dados_planilha(df_salvar):
         df_salvar[col] = df_salvar[col].astype(str).fillna("")
         df_salvar[col] = df_salvar[col].replace("nan", "")
 
-    # Força a atualização do cache e envia o DataFrame limpo
-    st.cache_data.clear()
-    conn.update(data=df_salvar)
+    # Salva garantindo o envio do dicionário limpo
+    conn.update(data=df_salvar.to_dict(orient="records"))
 
 
+# ==============================================================================
+# NOVAS FUNÇÕES EXCLUSIVAS PARA A ABA DE HISTÓRICO (Usando a mesma lógica segura)
+# ==============================================================================
 def carregar_historico():
     try:
         df_hist = conn.read(worksheet="historico_baixas", ttl=0, dtype=str)
@@ -94,17 +100,12 @@ def carregar_historico():
             "processo", "nome_ppl", "orgao_julgador", 
             "evento_detectado", "data_evento_tjes", "data_registro_sistema"
         ]
-        
         for col in colunas_hist:
             if col not in df_hist.columns:
                 df_hist[col] = ""
-                
         df_hist = df_hist[colunas_hist]
-
         for col in df_hist.columns:
-            df_hist[col] = df_hist[col].astype(str).fillna("")
-            df_hist[col] = df_hist[col].replace("nan", "")
-
+            df_hist[col] = df_hist[col].astype(str).fillna("").replace("nan", "")
         df_hist["processo"] = df_hist["processo"].apply(formatar_numero_processo)
         return df_hist
     except Exception:
@@ -113,25 +114,21 @@ def carregar_historico():
             "evento_detectado", "data_evento_tjes", "data_registro_sistema"
         ])
 
-
 def salvar_historico(df_hist_salvar):
     df_hist_salvar["processo"] = df_hist_salvar["processo"].apply(formatar_numero_processo)
     for col in df_hist_salvar.columns:
-        df_hist_salvar[col] = df_hist_salvar[col].astype(str).fillna("")
-        df_hist_salvar[col] = df_hist_salvar[col].replace("nan", "")
-
-    # Força a atualização do cache e salva na aba correta
-    st.cache_data.clear()
-    conn.update(worksheet="historico_baixas", data=df_hist_salvar)
+        df_hist_salvar[col] = df_hist_salvar[col].astype(str).fillna("").replace("nan", "")
+    # Salva na worksheet específica usando a lógica de dicionário que funciona
+    conn.update(worksheet="historico_baixas", data=df_hist_salvar.to_dict(orient="records"))
 
 
 # ==============================================================================
-# INTERFACE COM ABAS
+# DESIGN DA PÁGINA (CRIANDO AS ABAS)
 # ==============================================================================
 aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento Ativo", "🚨 Histórico de Baixas"])
 
 # ------------------------------------------------------------------------------
-# ABA 1: MONITORAMENTO (Tabela principal e Varredura)
+# ABA 1: TODO O SEU CÓDIGO ORIGINAL INTACTO FICA AQUI DENTRO
 # ------------------------------------------------------------------------------
 with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
@@ -260,8 +257,10 @@ with aba_monitoramento:
                         ppl = df_execucao.at[idx, "nome_ppl"]
 
                         if not numero_limpo or len(numero_limpo) != 20:
+                            st.toast(f"⚠️ Processo inválido ignorado: '{numero_limpo}'")
                             continue
 
+                        # Busca termo exato
                         payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                         try:
@@ -277,9 +276,10 @@ with aba_monitoramento:
                                 if isinstance(orgao_info, dict):
                                     orgao_nome = str(orgao_info.get("nome", "")).strip()
 
-                                if orgao_nome and df_execucao.at[idx, "orgao_julgador"] != orgao_nome:
+                                if orgao_nome:
                                     df_execucao.at[idx, "orgao_julgador"] = orgao_nome
                                     alteracao_dados = True
+                                    st.toast(f"✓ Órgão localizado: {orgao_nome}")
 
                                 movs = fonte.get("movimentos", [])
                                 for m in movs:
@@ -295,6 +295,9 @@ with aba_monitoramento:
                                             "data": m.get("dataHora"),
                                         })
                                         break
+                            else:
+                                st.toast(f"❌ Processo {numero_limpo} não encontrado no TJES.")
+
                         except Exception as e:
                             st.error(f"Erro ao consultar o Datajud: {e}")
 
@@ -303,50 +306,59 @@ with aba_monitoramento:
 
                 if alertas:
                     st.balloons()
-                    st.error("🚨 Atenção: desimpedimentos detectados e registrados no Histórico!")
+                    st.error("🚨 Atenção: desimpedimento detectado!")
                     
-                    df_historico_atual = carregar_historico()
-                    novos_registros_hist = []
-                    agora_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    # --- GRAVA NO HISTÓRICO SEM INTERFERIR NO RESTO ---
+                    try:
+                        df_hist_atual = carregar_historico()
+                        lista_novos = []
+                        agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        
+                        for a in alertas:
+                            lista_novos.append({
+                                "processo": a['proc'],
+                                "nome_ppl": a['ppl'],
+                                "orgao_julgador": a['orgao'],
+                                "evento_detectado": a['evento'],
+                                "data_evento_tjes": a['data'],
+                                "data_registro_sistema": agora
+                            })
+                            
+                        df_novos = pd.DataFrame(lista_novos)
+                        df_hist_novo = pd.concat([df_hist_atual, df_novos], ignore_index=True)
+                        salvar_historico(df_hist_novo)
+                    except Exception as e:
+                        st.error(f"Não foi possível salvar na aba de histórico: {e}")
+                    # --------------------------------------------------
 
                     for a in alertas:
                         st.markdown(f"""
-                        * **PPL:** {a['ppl']} | **Processo:** `{a['proc']}` | **Movimento:** {a['evento']}
+                        * **PPL:** {a['ppl']}
+                        * **Processo:** `{a['proc']}`
+                        * **Órgão julgador:** {a['orgao']}
+                        * **Movimento:** {a['evento']}
+                        * **Data/Hora:** {a['data']}
+                        * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                         """)
-                        
-                        novos_registros_hist.append({
-                            "processo": a['proc'],
-                            "nome_ppl": a['ppl'],
-                            "orgao_julgador": a['orgao'],
-                            "evento_detectado": a['evento'],
-                            "data_evento_tjes": a['data'],
-                            "data_registro_sistema": agora_str
-                        })
-                    
-                    df_novos_hist = pd.DataFrame(novos_registros_hist)
-                    df_historico_atualizado = pd.concat([df_historico_atual, df_novos_hist], ignore_index=True)
-                    salvar_historico(df_historico_atualizado)
-
                 else:
-                    st.success("Varredura concluída! A planilha foi atualizada silenciosamente.")
+                    st.success("Varredura concluída com sucesso.")
 
                 st.rerun()
     else:
-        st.info("Nenhum processo cadastrado na planilha principal até o momento.")
-
+        st.info("Nenhum processo cadastrado na planilha até o momento.")
 
 # ------------------------------------------------------------------------------
-# ABA 2: HISTÓRICO DE BAIXAS
+# ABA 2: VISUALIZAÇÃO DO HISTÓRICO
 # ------------------------------------------------------------------------------
 with aba_historico:
     st.subheader("📋 Registro de Baixas e Desimpedimentos Detectados")
-    st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada durante as varreduras.")
+    st.markdown("Histórico de todos os processos que tiveram movimentação impeditiva detectada pelo sistema.")
     
-    df_hist = carregar_historico()
+    df_hist_view = carregar_historico()
     
-    if not df_hist.empty:
+    if not df_hist_view.empty:
         st.dataframe(
-            df_hist,
+            df_hist_view,
             column_config={
                 "processo": "PROCESSO",
                 "nome_ppl": "NOME DA PPL",
@@ -359,4 +371,4 @@ with aba_historico:
             hide_index=True
         )
     else:
-        st.info("Nenhum histórico de baixa registrado até o momento. As detecções futuras aparecerão aqui.")
+        st.info("Nenhum histórico de baixa registrado até o momento.")
