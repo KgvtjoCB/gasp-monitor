@@ -35,7 +35,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def formatar_numero_processo(valor):
-    """Lê exatamente o texto como está, removendo apenas espaços, apóstrofos e traços."""
+    """Lê o texto, removendo apenas espaços, apóstrofos e traços."""
     if pd.isna(valor) or valor is None:
         return ""
     
@@ -44,16 +44,14 @@ def formatar_numero_processo(valor):
     if val_str.lower() == "nan":
         return ""
 
-    # Remove o apóstrofo caso o Google Sheets envie ele na string
     if val_str.startswith("'"):
         val_str = val_str[1:]
 
-    # Remove qualquer coisa que não seja número
     return re.sub(r"\D", "", val_str)
 
 
 def carregar_dados():
-    # O SEGREDO ESTÁ AQUI: dtype=str proíbe o Pandas de transformar texto em número!
+    # O dtype=str proíbe o Pandas de transformar texto em número/float
     df = conn.read(ttl=0, dtype=str)
 
     colunas_necessarias = [
@@ -69,7 +67,7 @@ def carregar_dados():
 
     df = df[colunas_necessarias]
 
-    # Troca possíveis valores 'nan' gerados pelo Pandas por vazio
+    # Limpa possíveis valores 'nan' gerados pela conversão
     for col in df.columns:
         df[col] = df[col].astype(str).fillna("")
         df[col] = df[col].replace("nan", "")
@@ -84,8 +82,9 @@ def salvar_dados_planilha(df_salvar):
         df_salvar[col] = df_salvar[col].astype(str).fillna("")
         df_salvar[col] = df_salvar[col].replace("nan", "")
 
-    # Salva garantindo o envio do dicionário limpo
-    conn.update(data=df_salvar.to_dict(orient="records"))
+    # Limpa o cache para forçar a atualização visual e envia como DataFrame
+    st.cache_data.clear()
+    conn.update(data=df_salvar)
 
 
 # ------------------------------------------------------------------------------
@@ -220,7 +219,6 @@ if not df_banco.empty:
                     ppl = df_execucao.at[idx, "nome_ppl"]
 
                     if not numero_limpo or len(numero_limpo) != 20:
-                        st.toast(f"⚠️ Processo inválido ignorado: '{numero_limpo}'")
                         continue
 
                     # Busca termo exato
@@ -242,7 +240,6 @@ if not df_banco.empty:
                             if orgao_nome:
                                 df_execucao.at[idx, "orgao_julgador"] = orgao_nome
                                 alteracao_dados = True
-                                st.toast(f"✓ Órgão localizado: {orgao_nome}")
 
                             movs = fonte.get("movimentos", [])
                             for m in movs:
@@ -258,9 +255,6 @@ if not df_banco.empty:
                                         "data": m.get("dataHora"),
                                     })
                                     break
-                        else:
-                            st.toast(f"❌ Processo {numero_limpo} não encontrado no TJES.")
-
                     except Exception as e:
                         st.error(f"Erro ao consultar o Datajud: {e}")
 
@@ -280,7 +274,7 @@ if not df_banco.empty:
                     * **Ação recomendada:** Reavaliar a transferência para o regime semiaberto no BNMP 3.0 e alterar o status para **Analisado**.
                     """)
             else:
-                st.success("Varredura concluída com sucesso.")
+                st.success("Varredura concluída! A planilha foi atualizada silenciosamente.")
 
             st.rerun()
 else:
