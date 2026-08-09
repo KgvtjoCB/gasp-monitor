@@ -35,21 +35,26 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def formatar_numero_processo(valor):
-    """Garante apenas os dígitos do processo mantendo como string pura."""
-    if pd.isna(valor) or valor == "" or valor is None:
+    """Lê exatamente o texto como está, removendo apenas espaços, apóstrofos e traços."""
+    if pd.isna(valor) or valor is None:
+        return ""
+    
+    val_str = str(valor).strip()
+    
+    if val_str.lower() == "nan":
         return ""
 
-    val_str = str(valor).strip()
+    # Remove o apóstrofo caso o Google Sheets envie ele na string
+    if val_str.startswith("'"):
+        val_str = val_str[1:]
 
-    # Se a planilha enviou como float com notação científica, avisa/limpa
-    if "e+" in val_str.lower():
-        val_str = val_str.split(".")[0]
-
-    return re.sub(r"\D", "", val_str)[:20]
+    # Remove qualquer coisa que não seja número
+    return re.sub(r"\D", "", val_str)
 
 
 def carregar_dados():
-    df = conn.read(ttl=0)
+    # O SEGREDO ESTÁ AQUI: dtype=str proíbe o Pandas de transformar texto em número!
+    df = conn.read(ttl=0, dtype=str)
 
     colunas_necessarias = [
         "processo",
@@ -64,21 +69,22 @@ def carregar_dados():
 
     df = df[colunas_necessarias]
 
-    # Força a conversão das colunas para string pura
+    # Troca possíveis valores 'nan' gerados pelo Pandas por vazio
     for col in df.columns:
         df[col] = df[col].astype(str).fillna("")
+        df[col] = df[col].replace("nan", "")
 
     df["processo"] = df["processo"].apply(formatar_numero_processo)
     return df
 
 
 def salvar_dados_planilha(df_salvar):
-    df_salvar["processo"] = df_salvar["processo"].apply(
-        formatar_numero_processo
-    )
+    df_salvar["processo"] = df_salvar["processo"].apply(formatar_numero_processo)
     for col in df_salvar.columns:
         df_salvar[col] = df_salvar[col].astype(str).fillna("")
+        df_salvar[col] = df_salvar[col].replace("nan", "")
 
+    # Salva garantindo o envio do dicionário limpo
     conn.update(data=df_salvar.to_dict(orient="records"))
 
 
@@ -124,7 +130,7 @@ if submit:
     if not num_limpo or not nome_formatado:
         st.error("Preencha o número do processo e o nome do preso.")
     elif len(num_limpo) != 20:
-        st.error("O número do processo deve conter exatamente 20 dígitos.")
+        st.error(f"O número do processo deve conter exatamente 20 dígitos (tem {len(num_limpo)}).")
     else:
         df_atual = carregar_dados()
 
@@ -142,9 +148,7 @@ if submit:
                 "status": status_inicial,
             }])
 
-            df_atualizado = pd.concat(
-                [df_atual, novo_registro], ignore_index=True
-            )
+            df_atualizado = pd.concat([df_atual, novo_registro], ignore_index=True)
             salvar_dados_planilha(df_atualizado)
             st.success("Processo cadastrado com sucesso na planilha.")
             st.rerun()
@@ -205,44 +209,25 @@ if not df_banco.empty:
         alteracao_dados = False
 
         df_execucao = df_banco.copy()
-        indices_pendentes = df_execucao[
-            df_execucao["status"] == "Pendente"
-        ].index
+        indices_pendentes = df_execucao[df_execucao["status"] == "Pendente"].index
 
         if len(indices_pendentes) == 0:
             st.info("Não há processos com status 'Pendente' para consultar.")
         else:
-            with st.spinner(
-                f"Consultando a API do TJES para {len(indices_pendentes)} processo(s)..."
-            ):
+            with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s)..."):
                 for idx in indices_pendentes:
-                    numero_limpo = formatar_numero_processo(
-                        df_execucao.at[idx, "processo"]
-                    )
+                    numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
                     ppl = df_execucao.at[idx, "nome_ppl"]
 
-                    # Alerta caso o número continue com zeros no final por formatação do Google Sheets
-                    if numero_limpo.endswith("0000"):
-                        st.error(
-                            f"⚠️ O processo '{numero_limpo}' teve os últimos dígitos zerados. Formate a Coluna A do Google Sheets como 'Texto Simples'."
-                        )
-                        continue
-
                     if not numero_limpo or len(numero_limpo) != 20:
-                        st.toast(
-                            f"⚠️ Processo com número inválido ignorado: '{numero_limpo}'"
-                        )
+                        st.toast(f"⚠️ Processo inválido ignorado: '{numero_limpo}'")
                         continue
 
+                    # Busca termo exato
                     payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                     try:
-                        res = requests.post(
-                            URL_API,
-                            json=payload,
-                            headers=headers,
-                            timeout=15,
-                        )
+                        res = requests.post(URL_API, json=payload, headers=headers, timeout=15)
                         dados = res.json()
                         hits = dados.get("hits", {}).get("hits", [])
 
@@ -252,14 +237,10 @@ if not df_banco.empty:
                             orgao_info = fonte.get("orgaoJulgador", {})
                             orgao_nome = ""
                             if isinstance(orgao_info, dict):
-                                orgao_nome = str(
-                                    orgao_info.get("nome", "")
-                                ).strip()
+                                orgao_nome = str(orgao_info.get("nome", "")).strip()
 
                             if orgao_nome:
-                                df_execucao.at[idx, "orgao_julgador"] = (
-                                    orgao_nome
-                                )
+                                df_execucao.at[idx, "orgao_julgador"] = orgao_nome
                                 alteracao_dados = True
                                 st.toast(f"✓ Órgão localizado: {orgao_nome}")
 
@@ -268,9 +249,7 @@ if not df_banco.empty:
                                 cod = m.get("codigo")
                                 nome_mov = str(m.get("nome", "")).lower()
 
-                                if (cod in CODIGOS_ALVO) or any(
-                                    t in nome_mov for t in TERMOS_ALVO
-                                ):
+                                if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
                                     alertas.append({
                                         "ppl": ppl,
                                         "proc": numero_limpo,
@@ -280,9 +259,7 @@ if not df_banco.empty:
                                     })
                                     break
                         else:
-                            st.toast(
-                                f"❌ Processo {numero_limpo} não encontrado no TJES."
-                            )
+                            st.toast(f"❌ Processo {numero_limpo} não encontrado no TJES.")
 
                     except Exception as e:
                         st.error(f"Erro ao consultar o Datajud: {e}")
