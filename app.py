@@ -7,20 +7,39 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 # ==============================================================================
-# CONFIGURAÇÕES DO DATAJUD / CNJ
+# CONFIGURAÇÕES DO DATAJUD / CNJ (TODAS AS MODALIDADES DE LIBERDADE)
 # ==============================================================================
 URL_API = "https://api-publica.datajud.cnj.jus.br/api_publica_tjes/_search"
 API_KEY = "cDZHYzlZa0JadVREZDJCendQbXY6SkJlTzNjLV9TRENyQk1RdnFKZGRQdw=="
 
-CODIGOS_ALVO = [12001, 12002, 26, 51]
+# Códigos TPU/CNJ oficiais de soltura, revogação, relaxamento e extinção
+CODIGOS_ALVO = [
+    12001,  # Alvará de Soltura
+    12002,  # Contramandado de Prisão
+    10964,  # Concessão de Liberdade Provisória
+    10963,  # Revogação de Prisão Preventiva
+    10965,  # Revogação de Prisão Temporária
+    10966,  # Relaxamento de Prisão
+    183,    # Extinção da Punibilidade
+]
+
+# Termos textuais abrangentes para capturar variações do TJES
 TERMOS_ALVO = [
     "alvará de soltura",
-    "baixa de mandado de prisão",
+    "alvara de soltura",
     "contramandado",
-    "revogação de prisão temporária",
-    "revogação de prisão preventiva",
+    "baixa de mandado de prisão",
+    "baixa do mandado",
+    "liberdade provisória",
+    "liberdade provisoria",
+    "revogação de prisão",
+    "revogacao de prisao",
     "relaxamento de prisão",
+    "relaxamento de prisao",
     "extinção da punibilidade",
+    "extincao da punibilidade",
+    "concedida a liberdade",
+    "revogada a prisão",
 ]
 
 st.set_page_config(
@@ -34,28 +53,21 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==============================================================================
-# 1. FUNÇÕES ORIGINAIS INTACTAS (NADA FOI ALTERADO AQUI)
+# FUNÇÕES DE BANCO DE DADOS (PERMANECEM INTACTAS)
 # ==============================================================================
 def formatar_numero_processo(valor):
-    """Lê o texto, removendo apenas espaços, apóstrofos e traços."""
     if pd.isna(valor) or valor is None:
         return ""
-    
     val_str = str(valor).strip()
-    
     if val_str.lower() == "nan":
         return ""
-
     if val_str.startswith("'"):
         val_str = val_str[1:]
-
     return re.sub(r"\D", "", val_str)
 
 
 def carregar_dados():
-    # O dtype=str proíbe o Pandas de transformar texto em número/float
     df = conn.read(ttl=0, dtype=str)
-
     colunas_necessarias = [
         "processo",
         "nome_ppl",
@@ -66,14 +78,9 @@ def carregar_dados():
     for col in colunas_necessarias:
         if col not in df.columns:
             df[col] = ""
-
     df = df[colunas_necessarias]
-
-    # Limpa possíveis valores 'nan' gerados pela conversão
     for col in df.columns:
-        df[col] = df[col].astype(str).fillna("")
-        df[col] = df[col].replace("nan", "")
-
+        df[col] = df[col].astype(str).fillna("").replace("nan", "")
     df["processo"] = df["processo"].apply(formatar_numero_processo)
     return df
 
@@ -81,64 +88,46 @@ def carregar_dados():
 def salvar_dados_planilha(df_salvar):
     df_salvar["processo"] = df_salvar["processo"].apply(formatar_numero_processo)
     for col in df_salvar.columns:
-        df_salvar[col] = df_salvar[col].astype(str).fillna("")
-        df_salvar[col] = df_salvar[col].replace("nan", "")
-
-    # Limpa o cache para forçar a atualização visual e envia como DataFrame
+        df_salvar[col] = df_salvar[col].astype(str).fillna("").replace("nan", "")
     st.cache_data.clear()
     conn.update(data=df_salvar)
 
-# ==============================================================================
-# 2. NOVAS FUNÇÕES ISOLADAS (EXCLUSIVAS PARA A ABA DE HISTÓRICO)
-# ==============================================================================
+
 def carregar_historico_baixas():
     try:
-        # Tenta ler a aba recém-criada
         df_hist = conn.read(worksheet="historico_baixas", ttl=0, dtype=str)
-        
         colunas_hist = [
             "processo", "nome_ppl", "orgao_julgador", 
             "evento_detectado", "data_evento_tjes", "data_registro_sistema"
         ]
-        
         for col in colunas_hist:
             if col not in df_hist.columns:
                 df_hist[col] = ""
-                
         df_hist = df_hist[colunas_hist]
-
         for col in df_hist.columns:
-            df_hist[col] = df_hist[col].astype(str).fillna("")
-            df_hist[col] = df_hist[col].replace("nan", "")
-
+            df_hist[col] = df_hist[col].astype(str).fillna("").replace("nan", "")
         df_hist["processo"] = df_hist["processo"].apply(formatar_numero_processo)
         return df_hist
     except Exception:
-        # Se a aba estiver vazia ou com erro, retorna estrutura base
         return pd.DataFrame(columns=[
             "processo", "nome_ppl", "orgao_julgador", 
             "evento_detectado", "data_evento_tjes", "data_registro_sistema"
         ])
 
+
 def salvar_historico_baixas(df_hist_salvar):
     df_hist_salvar["processo"] = df_hist_salvar["processo"].apply(formatar_numero_processo)
     for col in df_hist_salvar.columns:
-        df_hist_salvar[col] = df_hist_salvar[col].astype(str).fillna("")
-        df_hist_salvar[col] = df_hist_salvar[col].replace("nan", "")
-
-    # Salva passando os dados como DataFrame nativo (igual à função original que funcionou)
+        df_hist_salvar[col] = df_hist_salvar[col].astype(str).fillna("").replace("nan", "")
     st.cache_data.clear()
     conn.update(worksheet="historico_baixas", data=df_hist_salvar)
 
 
 # ==============================================================================
-# DESIGN DA PÁGINA (SISTEMA DE ABAS)
+# DESIGN DA PÁGINA (ABAS)
 # ==============================================================================
 aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento Ativo", "🚨 Histórico de Baixas"])
 
-# ------------------------------------------------------------------------------
-# ABA 1: MONITORAMENTO (TODO O SEU CÓDIGO VISUAL INTACTO)
-# ------------------------------------------------------------------------------
 with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
 
@@ -268,7 +257,6 @@ with aba_monitoramento:
                         if not numero_limpo or len(numero_limpo) != 20:
                             continue
 
-                        # Busca termo exato
                         payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
                         try:
@@ -312,7 +300,6 @@ with aba_monitoramento:
                     st.balloons()
                     st.error("🚨 Atenção: desimpedimento detectado!")
                     
-                    # === NOVO BLOCO ISOLADO: SALVA NO HISTÓRICO ===
                     try:
                         df_hist_atual = carregar_historico_baixas()
                         novos_registros = []
@@ -333,7 +320,6 @@ with aba_monitoramento:
                         salvar_historico_baixas(df_hist_atualizado)
                     except Exception as e:
                         st.error(f"Aviso: Não foi possível gravar o histórico na nova aba. Erro: {e}")
-                    # ==============================================
 
                     for a in alertas:
                         st.markdown(f"""
@@ -351,9 +337,6 @@ with aba_monitoramento:
     else:
         st.info("Nenhum processo cadastrado na planilha até o momento.")
 
-# ------------------------------------------------------------------------------
-# ABA 2: HISTÓRICO DE BAIXAS (Visualização)
-# ------------------------------------------------------------------------------
 with aba_historico:
     st.subheader("📋 Registro de Baixas e Desimpedimentos Detectados")
     st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada durante as varreduras.")
@@ -361,7 +344,6 @@ with aba_historico:
     df_historico_view = carregar_historico_baixas()
     
     if not df_historico_view.empty:
-        # Exibe como leitura
         st.dataframe(
             df_historico_view,
             column_config={
