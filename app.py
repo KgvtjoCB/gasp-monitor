@@ -158,10 +158,10 @@ with aba_monitoramento:
 
         with col4:
             data_mandado = st.date_input(
-                "Data do mandado:",
+                "Última verificação no BNMP:",
                 value=datetime.now(),
                 format="DD/MM/YYYY",
-                help="Data em que o mandado de prisão atual foi expedido. Impede alertas falsos de alvarás antigos."
+                help="Data em que foi realizada a última consulta no BNMP. Impede alertas falsos de alvarás antigos."
             )
 
         with col5:
