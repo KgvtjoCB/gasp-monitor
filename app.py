@@ -222,7 +222,7 @@ with aba_monitoramento:
                 ),
                 "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
                 "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
-                "data_mandado": st.column_config.TextColumn("DATA DO MANDADO"),
+                "data_mandado": st.column_config.TextColumn("ÚLTIMA VERIFICAÇÃO NO BNMP"),
                 "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
                 "status": st.column_config.SelectboxColumn(
                     "STATUS",
