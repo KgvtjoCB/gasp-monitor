@@ -44,6 +44,34 @@ st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
 )
 
+# ==============================================================================
+# ESTILIZAÇÃO CSS CUSTOMIZADA (PADRÃO CACTUS / INSTITUCIONAL)
+# ==============================================================================
+st.markdown("""
+<style>
+    /* Fundo limpo e tipografia neutra */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* Botões padronizados */
+    .stButton > button {
+        border-radius: 6px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    
+    /* Containers de formulário com bordas suaves */
+    div[data-testid="stForm"] {
+        background-color: #ffffff;
+        border-radius: 8px;
+        border: 1px solid #e9ecef;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        padding: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas (BETA)")
 st.markdown(
     "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
@@ -135,7 +163,6 @@ with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
 
     with st.form(key="form_cadastro", clear_on_submit=True):
-        # AJUSTE 1: Colunas redimensionadas e rótulos curtos para evitar quebra de linha
         col1, col2, col3, col4, col5 = st.columns([1.5, 2, 1, 1, 1])
 
         with col1:
@@ -211,7 +238,7 @@ with aba_monitoramento:
     df_exibicao = df_banco.copy()
 
     # ----------------------------------------------------------------------
-    # AJUSTE 2: TOOLBAR INSTITUCIONAL (Busca, Ordem e Badge em uma linha)
+    # TOOLBAR INSTITUCIONAL (Busca, Ordem expandida e Badge)
     # ----------------------------------------------------------------------
     col_busca, col_ordem, col_badge = st.columns([4, 2, 1])
 
@@ -228,8 +255,14 @@ with aba_monitoramento:
             options=[
                 "Data de inserção (mais recente)",
                 "Data de inserção (mais antiga)",
+                "Últ. verificação BNMP (mais recente)",
+                "Últ. verificação BNMP (mais antiga)",
                 "Nome do preso (A-Z)",
-                "Status (Pendentes 1º)"
+                "Nome do preso (Z-A)",
+                "Órgão Julgador (A-Z)",
+                "Órgão Julgador (Z-A)",
+                "Status (Pendentes 1º)",
+                "Status (Analisados 1º)"
             ],
             label_visibility="collapsed"
         )
@@ -252,10 +285,24 @@ with aba_monitoramento:
         elif opcao_ordem == "Data de inserção (mais antiga)":
             df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
             df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=True).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Últ. verificação BNMP (mais recente)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_mandado"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=False).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Últ. verificação BNMP (mais antiga)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_mandado"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=True).drop(columns=["dt_tmp"])
         elif opcao_ordem == "Nome do preso (A-Z)":
             df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=True)
+        elif opcao_ordem == "Nome do preso (Z-A)":
+            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=False)
+        elif opcao_ordem == "Órgão Julgador (A-Z)":
+            df_exibicao = df_exibicao.sort_values(by="orgao_julgador", ascending=True)
+        elif opcao_ordem == "Órgão Julgador (Z-A)":
+            df_exibicao = df_exibicao.sort_values(by="orgao_julgador", ascending=False)
         elif opcao_ordem == "Status (Pendentes 1º)":
             df_exibicao = df_exibicao.sort_values(by="status", ascending=False)
+        elif opcao_ordem == "Status (Analisados 1º)":
+            df_exibicao = df_exibicao.sort_values(by="status", ascending=True)
             
         df_exibicao = df_exibicao.reset_index(drop=True)
 
@@ -299,7 +346,7 @@ with aba_monitoramento:
             },
             use_container_width=True,
             num_rows="dynamic",
-            hide_index=True,  # Limpa o visual removendo a coluna numérica
+            hide_index=True,
         )
 
         col_btn_salvar, col_btn_varredura = st.columns([1, 1])
