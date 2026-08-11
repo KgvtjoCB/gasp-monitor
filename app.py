@@ -44,34 +44,6 @@ st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
 )
 
-# ==============================================================================
-# ESTILIZAÇÃO CSS CUSTOMIZADA (PADRÃO CACTUS / INSTITUCIONAL)
-# ==============================================================================
-st.markdown("""
-<style>
-    /* Fundo limpo e tipografia neutra */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    
-    /* Botões padronizados */
-    .stButton > button {
-        border-radius: 6px;
-        font-weight: 600;
-        transition: all 0.2s ease;
-    }
-    
-    /* Containers de formulário com bordas suaves */
-    div[data-testid="stForm"] {
-        background-color: #ffffff;
-        border-radius: 8px;
-        border: 1px solid #e9ecef;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-        padding: 20px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas (BETA)")
 st.markdown(
     "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
@@ -163,18 +135,19 @@ with aba_monitoramento:
     st.subheader("📋 Cadastrar novo processo impeditivo")
 
     with st.form(key="form_cadastro", clear_on_submit=True):
-        col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
+        # AJUSTE 1: Colunas redimensionadas e rótulos curtos para evitar quebra de linha
+        col1, col2, col3, col4, col5 = st.columns([1.5, 2, 1, 1, 1])
 
         with col1:
             num_processo = st.text_input(
-                "Número do processo (somente números):",
+                "Nº Processo (só números):",
                 placeholder="Ex: 50353902620258080048",
                 max_chars=20,
             )
 
         with col2:
             nome_ppl = st.text_input(
-                "Nome da pessoa privada de liberdade (PPL):",
+                "Nome do interno (PPL):",
                 placeholder="Ex: João da Silva",
             )
 
@@ -187,10 +160,10 @@ with aba_monitoramento:
 
         with col4:
             data_mandado = st.date_input(
-                "Última verificação no BNMP:",
+                "Últ. verif. BNMP:",
                 value=datetime.now(),
                 format="DD/MM/YYYY",
-                help="Data em que foi realizada a última consulta no BNMP. Impede alertas falsos de alvarás antigos."
+                help="Data em que foi realizada a última consulta no BNMP."
             )
 
         with col5:
@@ -232,18 +205,36 @@ with aba_monitoramento:
                 st.rerun()
 
     st.divider()
+    st.subheader("📊 Planilha de dados consolidados")
 
     df_banco = carregar_dados()
     df_exibicao = df_banco.copy()
 
     # ----------------------------------------------------------------------
-    # BUSCA GLOBAL E BADGE DE QUANTITATIVO
+    # AJUSTE 2: TOOLBAR INSTITUCIONAL (Busca, Ordem e Badge em uma linha)
     # ----------------------------------------------------------------------
-    termo_busca = st.text_input(
-        "🔍 Filtrar registros por nome, processo, órgão ou status:",
-        placeholder="Digite para pesquisar em tempo real em todas as colunas..."
-    )
+    col_busca, col_ordem, col_badge = st.columns([4, 2, 1])
 
+    with col_busca:
+        termo_busca = st.text_input(
+            "Buscar",
+            placeholder="🔍 Pesquisar processo, nome ou órgão...",
+            label_visibility="collapsed"
+        )
+
+    with col_ordem:
+        opcao_ordem = st.selectbox(
+            "Ordenar",
+            options=[
+                "Data de inserção (mais recente)",
+                "Data de inserção (mais antiga)",
+                "Nome do preso (A-Z)",
+                "Status (Pendentes 1º)"
+            ],
+            label_visibility="collapsed"
+        )
+
+    # Aplicação do Filtro
     if not df_exibicao.empty and termo_busca:
         termo_limpo = termo_busca.strip().lower()
         df_exibicao = df_exibicao[
@@ -253,20 +244,27 @@ with aba_monitoramento:
             df_exibicao["status"].str.lower().str.contains(termo_limpo)
         ]
 
-    # Reseta o índice para garantir ordenação nativa fluida ao clicar no cabeçalho
+    # Aplicação da Ordenação Forçada
     if not df_exibicao.empty:
+        if opcao_ordem == "Data de inserção (mais recente)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=False).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Data de inserção (mais antiga)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=True).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Nome do preso (A-Z)":
+            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=True)
+        elif opcao_ordem == "Status (Pendentes 1º)":
+            df_exibicao = df_exibicao.sort_values(by="status", ascending=False)
+            
         df_exibicao = df_exibicao.reset_index(drop=True)
 
-    total_registros = len(df_exibicao)
-    col_titulo, col_badge = st.columns([3, 1])
-
-    with col_titulo:
-        st.subheader("📊 Planilha de dados consolidados")
     with col_badge:
+        total_registros = len(df_exibicao)
         st.markdown(
             f"""
-            <div style="text-align: right; margin-top: 10px;">
-                <span style="background-color: #212529; color: #ffffff; padding: 6px 16px; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+            <div style="text-align: right; margin-top: 2px;">
+                <span style="background-color: #212529; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block;">
                     {total_registros} registro{'s' if total_registros != 1 else ''}
                 </span>
             </div>
@@ -274,9 +272,11 @@ with aba_monitoramento:
             unsafe_allow_html=True
         )
 
+    st.write("") # Espaçamento leve
+
     if not df_banco.empty:
         st.markdown(
-            "Edite as informações na tabela abaixo. Clique nos **cabeçalhos das colunas** para ordenar. Para **excluir**, selecione a linha, pressione **Delete** no teclado e salve."
+            "Edite na tabela abaixo. Para **excluir**, selecione a linha, pressione **Delete** no teclado e salve."
         )
 
         df_editado = st.data_editor(
@@ -289,7 +289,7 @@ with aba_monitoramento:
                 ),
                 "nome_ppl": st.column_config.TextColumn("NOME DO PRESO"),
                 "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
-                "data_mandado": st.column_config.TextColumn("ÚLTIMA VERIFICAÇÃO NO BNMP"),
+                "data_mandado": st.column_config.TextColumn("ÚLTIMA VERIF. BNMP"),
                 "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
                 "status": st.column_config.SelectboxColumn(
                     "STATUS",
@@ -299,7 +299,7 @@ with aba_monitoramento:
             },
             use_container_width=True,
             num_rows="dynamic",
-            hide_index=True,  # Oculta a coluna de índice numérico
+            hide_index=True,  # Limpa o visual removendo a coluna numérica
         )
 
         col_btn_salvar, col_btn_varredura = st.columns([1, 1])
