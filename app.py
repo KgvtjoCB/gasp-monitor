@@ -51,7 +51,7 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==============================================================================
-# FUNÇÕES DE BANCO DE DADOS (PERMANECEM INTACTAS)
+# FUNÇÕES DE BANCO DE DADOS
 # ==============================================================================
 def formatar_numero_processo(valor):
     if pd.isna(valor) or valor is None:
@@ -205,45 +205,43 @@ with aba_monitoramento:
     st.divider()
 
     df_banco = carregar_dados()
+    df_exibicao = df_banco.copy()
 
-    if not df_banco.empty:
-        # Prepara dados para busca e ordenação
-        df_exibicao = df_banco.copy()
+    # ----------------------------------------------------------------------
+    # CONTROLES VISUAIS FIXOS: FILTRO, ORDENAÇÃO E QUANTITATIVO
+    # ----------------------------------------------------------------------
+    col_filtro_busca, col_filtro_ordem = st.columns([2, 2])
 
-        # ----------------------------------------------------------------------
-        # RECURSOS VISUAIS: FILTRO, ORDENAÇÃO E QUANTITATIVO
-        # ----------------------------------------------------------------------
-        col_filtro_busca, col_filtro_ordem = st.columns([2, 2])
+    with col_filtro_busca:
+        termo_busca = st.text_input(
+            "🔍 Filtrar registros por nome, processo ou órgão:",
+            placeholder="Digite para pesquisar em tempo real..."
+        )
 
-        with col_filtro_busca:
-            termo_busca = st.text_input(
-                "🔍 Filtrar registros por nome, processo ou órgão:",
-                placeholder="Digite para pesquisar em tempo real..."
-            )
-
-        with col_filtro_ordem:
-            opcao_ordem = st.selectbox(
-                "Ordenar por:",
-                options=[
-                    "Data de inserção (mais recente)",
-                    "Data de inserção (mais antiga)",
-                    "Nome do preso (A-Z)",
-                    "Nome do preso (Z-A)",
-                    "Status (Pendente primeiro)"
-                ]
-            )
-
-        # Aplica o filtro de busca textual
-        if termo_busca:
-            termo_limpo = termo_busca.strip().lower()
-            df_exibicao = df_exibicao[
-                df_exibicao["nome_ppl"].str.lower().str.contains(termo_limpo) |
-                df_exibicao["processo"].str.contains(termo_limpo) |
-                df_exibicao["orgao_julgador"].str.lower().str.contains(termo_limpo) |
-                df_exibicao["status"].str.lower().str.contains(termo_limpo)
+    with col_filtro_ordem:
+        opcao_ordem = st.selectbox(
+            "Ordenar por:",
+            options=[
+                "Data de inserção (mais recente)",
+                "Data de inserção (mais antiga)",
+                "Nome do preso (A-Z)",
+                "Nome do preso (Z-A)",
+                "Status (Pendente primeiro)"
             ]
+        )
 
-        # Aplica a ordenação
+    # Aplica o filtro de busca textual se houver dados
+    if not df_exibicao.empty and termo_busca:
+        termo_limpo = termo_busca.strip().lower()
+        df_exibicao = df_exibicao[
+            df_exibicao["nome_ppl"].str.lower().str.contains(termo_limpo) |
+            df_exibicao["processo"].str.contains(termo_limpo) |
+            df_exibicao["orgao_julgador"].str.lower().str.contains(termo_limpo) |
+            df_exibicao["status"].str.lower().str.contains(termo_limpo)
+        ]
+
+    # Aplica a ordenação se houver dados
+    if not df_exibicao.empty:
         if opcao_ordem == "Data de inserção (mais recente)":
             df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
             df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=False).drop(columns=["dt_tmp"])
@@ -257,24 +255,25 @@ with aba_monitoramento:
         elif opcao_ordem == "Status (Pendente primeiro)":
             df_exibicao = df_exibicao.sort_values(by="status", ascending=False)
 
-        # Cabeçalho com o badge quantitativo (estilizado idêntico à imagem enviada)
-        total_registros = len(df_exibicao)
-        col_titulo, col_badge = st.columns([3, 1])
+    # Cabeçalho com o badge quantitativo visível
+    total_registros = len(df_exibicao)
+    col_titulo, col_badge = st.columns([3, 1])
 
-        with col_titulo:
-            st.subheader("📊 Planilha de dados consolidados")
-        with col_badge:
-            st.markdown(
-                f"""
-                <div style="text-align: right; margin-top: 10px;">
-                    <span style="background-color: #212529; color: #ffffff; padding: 6px 16px; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
-                        {total_registros} registro{'s' if total_registros != 1 else ''}
-                    </span>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    with col_titulo:
+        st.subheader("📊 Planilha de dados consolidados")
+    with col_badge:
+        st.markdown(
+            f"""
+            <div style="text-align: right; margin-top: 10px;">
+                <span style="background-color: #212529; color: #ffffff; padding: 6px 16px; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+                    {total_registros} registro{'s' if total_registros != 1 else ''}
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
+    if not df_banco.empty:
         st.markdown(
             "Edite as informações na tabela abaixo. Para **excluir**, clique na linha e pressione **Delete** do teclado e salve."
         )
