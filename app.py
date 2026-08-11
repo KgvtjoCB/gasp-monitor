@@ -43,6 +43,35 @@ TERMOS_ALVO = [
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
 )
+
+# ==============================================================================
+# ESTILIZAÇÃO CSS CUSTOMIZADA (PADRÃO CACTUS / INSTITUCIONAL)
+# ==============================================================================
+st.markdown("""
+<style>
+    /* Fundo limpo e tipografia neutra */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* Botões padronizados */
+    .stButton > button {
+        border-radius: 6px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    
+    /* Containers de formulário com bordas suaves */
+    div[data-testid="stForm"] {
+        background-color: #ffffff;
+        border-radius: 8px;
+        border: 1px solid #e9ecef;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        padding: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas (BETA)")
 st.markdown(
     "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
@@ -208,29 +237,13 @@ with aba_monitoramento:
     df_exibicao = df_banco.copy()
 
     # ----------------------------------------------------------------------
-    # CONTROLES VISUAIS FIXOS: FILTRO, ORDENAÇÃO E QUANTITATIVO
+    # BUSCA GLOBAL E BADGE DE QUANTITATIVO
     # ----------------------------------------------------------------------
-    col_filtro_busca, col_filtro_ordem = st.columns([2, 2])
+    termo_busca = st.text_input(
+        "🔍 Filtrar registros por nome, processo, órgão ou status:",
+        placeholder="Digite para pesquisar em tempo real em todas as colunas..."
+    )
 
-    with col_filtro_busca:
-        termo_busca = st.text_input(
-            "🔍 Filtrar registros por nome, processo ou órgão:",
-            placeholder="Digite para pesquisar em tempo real..."
-        )
-
-    with col_filtro_ordem:
-        opcao_ordem = st.selectbox(
-            "Ordenar por:",
-            options=[
-                "Data de inserção (mais recente)",
-                "Data de inserção (mais antiga)",
-                "Nome do preso (A-Z)",
-                "Nome do preso (Z-A)",
-                "Status (Pendente primeiro)"
-            ]
-        )
-
-    # Aplica o filtro de busca textual se houver dados
     if not df_exibicao.empty and termo_busca:
         termo_limpo = termo_busca.strip().lower()
         df_exibicao = df_exibicao[
@@ -240,22 +253,10 @@ with aba_monitoramento:
             df_exibicao["status"].str.lower().str.contains(termo_limpo)
         ]
 
-    # Aplica a ordenação se houver dados
+    # Reseta o índice para garantir ordenação nativa fluida ao clicar no cabeçalho
     if not df_exibicao.empty:
-        if opcao_ordem == "Data de inserção (mais recente)":
-            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
-            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=False).drop(columns=["dt_tmp"])
-        elif opcao_ordem == "Data de inserção (mais antiga)":
-            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
-            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=True).drop(columns=["dt_tmp"])
-        elif opcao_ordem == "Nome do preso (A-Z)":
-            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=True)
-        elif opcao_ordem == "Nome do preso (Z-A)":
-            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=False)
-        elif opcao_ordem == "Status (Pendente primeiro)":
-            df_exibicao = df_exibicao.sort_values(by="status", ascending=False)
+        df_exibicao = df_exibicao.reset_index(drop=True)
 
-    # Cabeçalho com o badge quantitativo visível
     total_registros = len(df_exibicao)
     col_titulo, col_badge = st.columns([3, 1])
 
@@ -275,7 +276,7 @@ with aba_monitoramento:
 
     if not df_banco.empty:
         st.markdown(
-            "Edite as informações na tabela abaixo. Para **excluir**, clique na linha e pressione **Delete** do teclado e salve."
+            "Edite as informações na tabela abaixo. Clique nos **cabeçalhos das colunas** para ordenar. Para **excluir**, selecione a linha, pressione **Delete** no teclado e salve."
         )
 
         df_editado = st.data_editor(
@@ -298,6 +299,7 @@ with aba_monitoramento:
             },
             use_container_width=True,
             num_rows="dynamic",
+            hide_index=True,  # Oculta a coluna de índice numérico
         )
 
         col_btn_salvar, col_btn_varredura = st.columns([1, 1])
@@ -460,6 +462,7 @@ with aba_historico:
             },
             use_container_width=True,
             num_rows="dynamic",
+            hide_index=True,
             key="editor_historico"
         )
         
