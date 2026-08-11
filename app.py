@@ -51,7 +51,7 @@ st.markdown(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # ==============================================================================
-# FUNÇÕES DE BANCO DE DADOS
+# FUNÇÕES DE BANCO DE DADOS (PERMANECEM INTACTAS)
 # ==============================================================================
 def formatar_numero_processo(valor):
     if pd.isna(valor) or valor is None:
@@ -70,7 +70,7 @@ def carregar_dados():
         "processo",
         "nome_ppl",
         "data_insercao",
-        "data_mandado",  # NOVO CAMPO: Data da restrição atual
+        "data_mandado",
         "orgao_julgador",
         "status",
     ]
@@ -205,22 +205,89 @@ with aba_monitoramento:
     st.divider()
 
     df_banco = carregar_dados()
-    st.subheader("📊 Planilha de dados consolidados")
 
     if not df_banco.empty:
+        # Prepara dados para busca e ordenação
+        df_exibicao = df_banco.copy()
+
+        # ----------------------------------------------------------------------
+        # RECURSOS VISUAIS: FILTRO, ORDENAÇÃO E QUANTITATIVO
+        # ----------------------------------------------------------------------
+        col_filtro_busca, col_filtro_ordem = st.columns([2, 2])
+
+        with col_filtro_busca:
+            termo_busca = st.text_input(
+                "🔍 Filtrar registros por nome, processo ou órgão:",
+                placeholder="Digite para pesquisar em tempo real..."
+            )
+
+        with col_filtro_ordem:
+            opcao_ordem = st.selectbox(
+                "Ordenar por:",
+                options=[
+                    "Data de inserção (mais recente)",
+                    "Data de inserção (mais antiga)",
+                    "Nome do preso (A-Z)",
+                    "Nome do preso (Z-A)",
+                    "Status (Pendente primeiro)"
+                ]
+            )
+
+        # Aplica o filtro de busca textual
+        if termo_busca:
+            termo_limpo = termo_busca.strip().lower()
+            df_exibicao = df_exibicao[
+                df_exibicao["nome_ppl"].str.lower().str.contains(termo_limpo) |
+                df_exibicao["processo"].str.contains(termo_limpo) |
+                df_exibicao["orgao_julgador"].str.lower().str.contains(termo_limpo) |
+                df_exibicao["status"].str.lower().str.contains(termo_limpo)
+            ]
+
+        # Aplica a ordenação
+        if opcao_ordem == "Data de inserção (mais recente)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=False).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Data de inserção (mais antiga)":
+            df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
+            df_exibicao = df_exibicao.sort_values(by="dt_tmp", ascending=True).drop(columns=["dt_tmp"])
+        elif opcao_ordem == "Nome do preso (A-Z)":
+            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=True)
+        elif opcao_ordem == "Nome do preso (Z-A)":
+            df_exibicao = df_exibicao.sort_values(by="nome_ppl", ascending=False)
+        elif opcao_ordem == "Status (Pendente primeiro)":
+            df_exibicao = df_exibicao.sort_values(by="status", ascending=False)
+
+        # Cabeçalho com o badge quantitativo (estilizado idêntico à imagem enviada)
+        total_registros = len(df_exibicao)
+        col_titulo, col_badge = st.columns([3, 1])
+
+        with col_titulo:
+            st.subheader("📊 Planilha de dados consolidados")
+        with col_badge:
+            st.markdown(
+                f"""
+                <div style="text-align: right; margin-top: 10px;">
+                    <span style="background-color: #212529; color: #ffffff; padding: 6px 16px; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+                        {total_registros} registro{'s' if total_registros != 1 else ''}
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
         st.markdown(
             "Edite as informações na tabela abaixo. Para **excluir**, clique na linha e pressione **Delete** do teclado e salve."
         )
 
         df_editado = st.data_editor(
-            df_banco,
+            df_exibicao,
             column_config={
                 "processo": st.column_config.TextColumn(
                     "PROCESSO",
                     help="Número do processo (20 dígitos)",
                     validate=r"^\d{20}$",
                 ),
-                "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
+                "nome_ppl": st.column_config.TextColumn("NOME DO PRESO"),
                 "data_insercao": st.column_config.TextColumn("DATA DE INSERÇÃO"),
                 "data_mandado": st.column_config.TextColumn("ÚLTIMA VERIFICAÇÃO NO BNMP"),
                 "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
@@ -296,24 +363,18 @@ with aba_monitoramento:
                                     nome_mov = str(m.get("nome", "")).lower()
                                     data_mov_iso = m.get("dataHora", "")
 
-                                    # =======================================================
-                                    # NOVA VALIDAÇÃO TEMPORAL: Impede falsos positivos antigos
-                                    # =======================================================
                                     movimento_valido = True
                                     try:
                                         data_mandado_str = str(df_execucao.at[idx, "data_mandado"]).strip()
                                         
                                         if data_mandado_str and data_mov_iso:
-                                            # Converte a data informada na planilha (DD/MM/YYYY)
                                             dt_mandado = datetime.strptime(data_mandado_str, "%d/%m/%Y").date()
-                                            # Converte a data do movimento retornado pelo CNJ (YYYY-MM-DD)
                                             dt_movimento = datetime.strptime(data_mov_iso[:10], "%Y-%m-%d").date()
                                             
-                                            # Se a soltura ocorreu ANTES da prisão atual, o evento não é um alvará válido
                                             if dt_movimento < dt_mandado:
                                                 movimento_valido = False
                                     except Exception:
-                                        pass  # Se falhar na conversão por campo vazio ou inválido, ignora a restrição (segurança)
+                                        pass
 
                                     if movimento_valido:
                                         if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
@@ -392,7 +453,7 @@ with aba_historico:
             df_historico_view,
             column_config={
                 "processo": st.column_config.TextColumn("PROCESSO"),
-                "nome_ppl": st.column_config.TextColumn("NOME DA PPL"),
+                "nome_ppl": st.column_config.TextColumn("NOME DO PRESO"),
                 "orgao_julgador": st.column_config.TextColumn("ÓRGÃO JULGADOR"),
                 "evento_detectado": st.column_config.TextColumn("EVENTO DETECTADO (TJES)"),
                 "data_evento_tjes": st.column_config.TextColumn("DATA/HORA DO EVENTO"),
