@@ -45,37 +45,67 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# ESTILIZAÇÃO CSS CUSTOMIZADA (PADRÃO CACTUS / INSTITUCIONAL)
+# ESTILIZAÇÃO CSS CUSTOMIZADA (IDENTIDADE CACTUS)
 # ==============================================================================
 st.markdown("""
 <style>
-    /* Fundo limpo e tipografia neutra */
+    /* Fundo geral (off-white limpo) */
     .stApp {
-        background-color: #f8f9fa;
+        background-color: #f4f6f9;
     }
     
-    /* Botões padronizados */
-    .stButton > button {
-        border-radius: 6px;
-        font-weight: 600;
-        transition: all 0.2s ease;
+    /* Rótulos dos campos de input (Caixa Alta, Negrito, Grafite) */
+    .stTextInput label, .stDateInput label, .stSelectbox label {
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        font-size: 0.75rem !important;
+        color: #4b5563 !important;
+        letter-spacing: 0.025em;
     }
-    
-    /* Containers de formulário com bordas suaves */
+
+    /* Container do Formulário (Card branco com sombra) */
     div[data-testid="stForm"] {
         background-color: #ffffff;
         border-radius: 8px;
-        border: 1px solid #e9ecef;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-        padding: 20px;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    /* Botão Primário (Azul Marinho Sólido) */
+    .stButton > button[kind="primary"], div[data-testid="stForm"] .stButton > button {
+        background-color: #12284C !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        padding: 0.5rem 1.5rem !important;
+    }
+    .stButton > button[kind="primary"]:hover, div[data-testid="stForm"] .stButton > button:hover {
+        background-color: #1a3666 !important;
+    }
+
+    /* Botão Secundário (Vazado / Outline) */
+    .stButton > button[kind="secondary"] {
+        background-color: transparent !important;
+        color: #12284C !important;
+        border: 1px solid #12284C !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+    }
+    .stButton > button[kind="secondary"]:hover {
+        background-color: #f3f4f6 !important;
+    }
+    
+    /* Bordas das Inputs arredondadas e finas */
+    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+        border-radius: 6px !important;
+        border-color: #d1d5db !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚖️ Sistema de Monitoramento de Restrições Impeditivas (BETA)")
-st.markdown(
-    "Gerência de Administração do Sistema Penitenciário — Acompanhamento de processos"
-)
+st.title("⚖️ Monitoramento de Restrições Impeditivas (BETA)")
+st.markdown("GASP - Integração Automatizada com o Datajud/TJES")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -96,12 +126,8 @@ def formatar_numero_processo(valor):
 def carregar_dados():
     df = conn.read(ttl=0, dtype=str)
     colunas_necessarias = [
-        "processo",
-        "nome_ppl",
-        "data_insercao",
-        "data_mandado",
-        "orgao_julgador",
-        "status",
+        "processo", "nome_ppl", "data_insercao", 
+        "data_mandado", "orgao_julgador", "status"
     ]
     for col in colunas_necessarias:
         if col not in df.columns:
@@ -160,9 +186,17 @@ aba_monitoramento, aba_historico = st.tabs(["📊 Monitoramento ativo", "🚨 Hi
 # ABA 1: MONITORAMENTO ATIVO
 # ------------------------------------------------------------------------------
 with aba_monitoramento:
-    st.subheader("📋 Cadastrar novo processo impeditivo")
 
     with st.form(key="form_cadastro", clear_on_submit=True):
+        
+        # Banner/Cabeçalho integrado imitando estilo CACTUS
+        st.markdown("""
+        <div style="background-color: #12284C; color: white; padding: 16px; margin: -1.5rem -1.5rem 1.5rem -1.5rem; text-align: center; border-radius: 8px 8px 0 0;">
+            <h3 style="color: white; margin: 0; font-size: 18px; font-weight: 600;">🛡️ CADASTRAR NOVA RESTRIÇÃO IMPEDITIVA</h3>
+            <span style="font-size: 13px; font-weight: 400; opacity: 0.85;">Preencha os dados do mandado/interno para monitoramento processual</span>
+        </div>
+        """, unsafe_allow_html=True)
+
         col1, col2, col3, col4, col5 = st.columns([1.5, 2, 1, 1, 1])
 
         with col1:
@@ -198,7 +232,7 @@ with aba_monitoramento:
                 "Status do registro:", options=["Pendente", "Analisado"], index=0
             )
 
-        submit = st.form_submit_button("Cadastrar para monitoramento")
+        submit = st.form_submit_button("➔ Salvar Cadastro")
 
     if submit:
         num_limpo = formatar_numero_processo(num_processo)
@@ -238,7 +272,7 @@ with aba_monitoramento:
     df_exibicao = df_banco.copy()
 
     # ----------------------------------------------------------------------
-    # TOOLBAR INSTITUCIONAL (Busca, Ordem expandida e Badge)
+    # TOOLBAR DE PESQUISA, ORDENAÇÃO E BADGE DE QUANTITATIVO (Estilo CACTUS)
     # ----------------------------------------------------------------------
     col_busca, col_ordem, col_badge = st.columns([4, 2, 1])
 
@@ -267,7 +301,7 @@ with aba_monitoramento:
             label_visibility="collapsed"
         )
 
-    # Aplicação do Filtro
+    # Aplicação do Filtro Textual
     if not df_exibicao.empty and termo_busca:
         termo_limpo = termo_busca.strip().lower()
         df_exibicao = df_exibicao[
@@ -311,7 +345,7 @@ with aba_monitoramento:
         st.markdown(
             f"""
             <div style="text-align: right; margin-top: 2px;">
-                <span style="background-color: #212529; color: #ffffff; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block;">
+                <span style="background-color: #1a1a1a; color: #ffffff; padding: 6px 14px; border-radius: 12px; font-weight: 600; font-size: 13px; display: inline-block;">
                     {total_registros} registro{'s' if total_registros != 1 else ''}
                 </span>
             </div>
@@ -319,11 +353,12 @@ with aba_monitoramento:
             unsafe_allow_html=True
         )
 
-    st.write("") # Espaçamento leve
+    st.write("") 
 
     if not df_banco.empty:
         st.markdown(
-            "Edite na tabela abaixo. Para **excluir**, selecione a linha, pressione **Delete** no teclado e salve."
+            "<span style='color: #4b5563; font-size: 14px;'>Edite na tabela abaixo. Clique no cabeçalho das colunas para ordenação rápida. Para <b>excluir</b>, selecione a linha e pressione <b>Delete</b>.</span>", 
+            unsafe_allow_html=True
         )
 
         df_editado = st.data_editor(
@@ -352,14 +387,14 @@ with aba_monitoramento:
         col_btn_salvar, col_btn_varredura = st.columns([1, 1])
 
         with col_btn_salvar:
-            if st.button("💾 Salvar alterações na planilha"):
+            if st.button("💾 Salvar edições na planilha"):
                 salvar_dados_planilha(df_editado)
                 st.success("Alterações salvas com sucesso.")
                 st.rerun()
 
         with col_btn_varredura:
             executar_varredura = st.button(
-                "🔍 Executar varredura", type="primary"
+                "🔍 Executar varredura Datajud", type="primary"
             )
 
         if executar_varredura:
@@ -492,7 +527,7 @@ with aba_monitoramento:
 # ------------------------------------------------------------------------------
 with aba_historico:
     st.subheader("📋 Registro de baixas detectadas")
-    st.markdown("Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada. Para **excluir um registro**, selecione a linha na tabela, pressione **Delete** no teclado e clique em **Salvar alterações**.")
+    st.markdown("<span style='color: #4b5563; font-size: 14px;'>Abaixo estão listados todos os processos que tiveram movimentação de soltura/extinção detectada. Para <b>excluir um registro</b>, selecione a linha na tabela, pressione <b>Delete</b> no teclado e clique em <b>Salvar alterações</b>.</span>", unsafe_allow_html=True)
     
     df_historico_view = carregar_historico_baixas()
     
