@@ -1,7 +1,10 @@
 from datetime import datetime
 import hashlib
 import json
+import os
 import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import requests
 import streamlit as st
@@ -40,6 +43,9 @@ TERMOS_ALVO = [
     "concedida a liberdade",
     "revogada a prisão",
 ]
+
+# ID da Planilha do CACTUS onde fica a aba _USUARIOS
+ID_PLANILHA_CACTUS = "1JO6Pr6SZ3ywvBqgV2epQGI2R5D1YUuK_5keY-qZ59l0"
 
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
@@ -102,19 +108,6 @@ st.markdown("""
         border-radius: 6px !important;
         border-color: #d1d5db !important;
     }
-
-    /* Header Superior do Usuário */
-    .cactus-header {
-        background-color: #ffffff;
-        padding: 12px 20px;
-        border-radius: 8px;
-        border: 1px solid #e5e7eb;
-        margin-bottom: 20px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,17 +120,43 @@ def gerar_hash_sha256(texto):
     """Gera a hash SHA-256 equivalente ao Utilities.computeDigest do GAS"""
     return hashlib.sha256(str(texto).encode('utf-8')).hexdigest()
 
+def conectar_gspread_cactus():
+    """Conecta à planilha do CACTUS usando a mesma Service Account do Secrets"""
+    creds_dict = None
+    if "GCP_SERVICE_ACCOUNT" in st.secrets:
+        creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+    elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        creds_dict = dict(st.secrets["connections"]["gsheets"])
+
+    if not creds_dict:
+        raise ValueError("Credenciais GCP_SERVICE_ACCOUNT não encontradas nos Secrets.")
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_key(ID_PLANILHA_CACTUS).worksheet("_USUARIOS")
+
 def autenticar_usuario_cactus(email_digitado, senha_digitada):
     try:
-        # Carrega a aba de usuários do CACTUS
-        df_usuarios = conn.read(worksheet="_USUARIOS", ttl=0, dtype=str)
-        if df_usuarios.empty:
-            return False, "Base de usuários não encontrada.", None
+        sheet_usuarios = conectar_gspread_cactus()
+        registros = sheet_usuarios.get_all_records()
+        
+        if not registros:
+            return False, "Base de usuários vazia.", None
+
+        df_usuarios = pd.DataFrame(registros)
+        
+        # Garante tratamento do texto das colunas
+        for col in df_usuarios.columns:
+            df_usuarios[col] = df_usuarios[col].astype(str)
 
         email_limpo = str(email_digitado).strip().lower()
         hash_senha = gerar_hash_sha256(senha_digitada)
 
-        # Procura correspondência
+        # Procura correspondência de e-mail e hash
         usuario_match = df_usuarios[
             (df_usuarios['EMAIL'].str.strip().str.lower() == email_limpo) & 
             (df_usuarios['SENHA_HASH'].str.strip() == hash_senha)
@@ -149,7 +168,7 @@ def autenticar_usuario_cactus(email_digitado, senha_digitada):
         else:
             return False, "E-mail ou senha incorretos.", None
     except Exception as e:
-        return False, f"Erro ao conectar na base de usuários: {e}", None
+        return False, f"Erro ao conectar na base do CACTUS: {e}", None
 
 # Gerenciamento da Sessão de Login
 if "autenticado" not in st.session_state:
@@ -164,7 +183,7 @@ if not st.session_state["autenticado"]:
     col_l1, col_l2, col_l3 = st.columns([1, 1.2, 1])
 
     with col_l2:
-        st.write("") # Espaçamento superior
+        st.write("") 
         st.write("")
         with st.form(key="form_login_cactus"):
             st.markdown("""
