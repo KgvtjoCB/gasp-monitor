@@ -519,33 +519,51 @@ if st.session_state["autenticado"]:
                 )
 
             if executar_varredura:
-                headers = {
-                    "Authorization": f"APIKey {API_KEY}",
-                    "Content-Type": "application/json",
-                }
-                alertas = []
-                alteracao_dados = False
+            headers = {
+                "Authorization": f"APIKey {API_KEY}",
+                "Content-Type": "application/json",
+            }
+            alertas = []
+            alteracao_dados = False
+            processos_com_erro = []
 
-                df_execucao = df_banco.copy()
-                indices_pendentes = df_execucao[
-                    df_execucao["status"].str.strip().str.lower() == "pendente"
-                ].index
+            df_execucao = df_banco.copy()
+            indices_pendentes = df_execucao[
+                df_execucao["status"].str.strip().str.lower() == "pendente"
+            ].index
 
-                if len(indices_pendentes) == 0:
-                    st.info("Não há processos com status 'Pendente' para consultar.")
-                else:
-                    with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."):
-                        for idx in indices_pendentes:
-                            numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
-                            ppl = df_execucao.at[idx, "nome_ppl"]
+            if len(indices_pendentes) == 0:
+                st.info("Não há processos com status 'Pendente' para consultar.")
+            else:
+                progress_bar = st.progress(0)
+                total_proc = len(indices_pendentes)
 
-                            if not numero_limpo or len(numero_limpo) != 20:
-                                continue
+                with st.spinner(f"Consultando a API do TJES/Datajud para {total_proc} processo(s)..."):
+                    for i, idx in enumerate(indices_pendentes):
+                        # Atualiza barra de progresso visual
+                        progress_bar.progress((i + 1) / total_proc)
 
-                            payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
+                        numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
+                        ppl = df_execucao.at[idx, "nome_ppl"]
 
+                        if not numero_limpo or len(numero_limpo) != 20:
+                            continue
+
+                        payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
+
+                        # Lógica de tentativa com timeout ampliado para 30s
+                        res = None
+                        for tentativa in range(2): # Tenta até 2 vezes se der timeout
                             try:
-                                res = requests.post(URL_API, json=payload, headers=headers, timeout=15)
+                                res = requests.post(URL_API, json=payload, headers=headers, timeout=30)
+                                if res.status_code == 200:
+                                    break
+                            except requests.exceptions.RequestException:
+                                if tentativa == 1:
+                                    processos_com_erro.append(f"{ppl} ({numero_limpo})")
+
+                        if res and res.status_code == 200:
+                            try:
                                 dados = res.json()
                                 hits = dados.get("hits", {}).get("hits", [])
 
@@ -591,14 +609,18 @@ if st.session_state["autenticado"]:
                                                 })
                                                 break
                             except Exception as e:
-                                st.error(f"Erro ao consultar o Datajud: {e}")
+                                pass
 
-                    if alteracao_dados:
-                        salvar_dados_planilha(df_execucao)
+                progress_bar.empty() # Limpa a barra ao finalizar
 
-                    if alertas:
-                        st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")
-                        
+                if alteracao_dados:
+                    salvar_dados_planilha(df_execucao)
+
+                if processos_com_erro:
+                    st.warning(f"⚠️ O Datajud esteve instável e não respondeu para {len(processos_com_erro)} processo(s). Os demais foram consultados normalmente.")
+
+                if alertas:
+                    st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")                      
                         df_hist_atual = carregar_historico_baixas()
                         novos_registros = []
                         data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
