@@ -1,7 +1,10 @@
 from datetime import datetime
 import hashlib
 import json
+import os
 import re
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import requests
 import streamlit as st
@@ -40,6 +43,9 @@ TERMOS_ALVO = [
     "concedida a liberdade",
     "revogada a prisão",
 ]
+
+# ID da Planilha do CACTUS onde fica a aba _USUARIOS
+ID_PLANILHA_CACTUS = "1JO6Pr6SZ3ywvBqgV2epQGI2R5D1YUuK_5keY-qZ59l0"
 
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
@@ -102,19 +108,6 @@ st.markdown("""
         border-radius: 6px !important;
         border-color: #d1d5db !important;
     }
-
-    /* Header Superior do Usuário */
-    .cactus-header {
-        background-color: #ffffff;
-        padding: 12px 20px;
-        border-radius: 8px;
-        border: 1px solid #e5e7eb;
-        margin-bottom: 20px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,17 +120,48 @@ def gerar_hash_sha256(texto):
     """Gera a hash SHA-256 equivalente ao Utilities.computeDigest do GAS"""
     return hashlib.sha256(str(texto).encode('utf-8')).hexdigest()
 
+def obter_credenciais_gcp():
+    """Busca as credenciais do GCP nos Secrets testando múltiplos formatos de chaves"""
+    # Teste 1: Chave GCP_SERVICE_ACCOUNT direta
+    if "GCP_SERVICE_ACCOUNT" in st.secrets:
+        raw_val = st.secrets["GCP_SERVICE_ACCOUNT"]
+        return json.loads(raw_val) if isinstance(raw_val, str) else dict(raw_val)
+    
+    # Teste 2: Configuração gsheets nativa do Streamlit
+    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        g_secrets = st.secrets["connections"]["gsheets"]
+        if "service_account_json" in g_secrets:
+            return json.loads(g_secrets["service_account_json"])
+        return dict(g_secrets)
+        
+    raise ValueError("Chave de credenciais GCP não encontrada nos Secrets do Streamlit.")
+
+def conectar_gspread_cactus():
+    """Conecta à planilha do CACTUS utilizando gspread"""
+    creds_dict = obter_credenciais_gcp()
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_key(ID_PLANILHA_CACTUS).worksheet("_USUARIOS")
+
 def autenticar_usuario_cactus(email_digitado, senha_digitada):
     try:
-        # Carrega a aba de usuários do CACTUS
-        df_usuarios = conn.read(worksheet="_USUARIOS", ttl=0, dtype=str)
-        if df_usuarios.empty:
-            return False, "Base de usuários não encontrada.", None
+        sheet_usuarios = conectar_gspread_cactus()
+        registros = sheet_usuarios.get_all_records()
+        
+        if not registros:
+            return False, "Base de usuários vazia.", None
+
+        df_usuarios = pd.DataFrame(registros)
+        for col in df_usuarios.columns:
+            df_usuarios[col] = df_usuarios[col].astype(str)
 
         email_limpo = str(email_digitado).strip().lower()
         hash_senha = gerar_hash_sha256(senha_digitada)
 
-        # Procura correspondência
         usuario_match = df_usuarios[
             (df_usuarios['EMAIL'].str.strip().str.lower() == email_limpo) & 
             (df_usuarios['SENHA_HASH'].str.strip() == hash_senha)
@@ -149,7 +173,7 @@ def autenticar_usuario_cactus(email_digitado, senha_digitada):
         else:
             return False, "E-mail ou senha incorretos.", None
     except Exception as e:
-        return False, f"Erro ao conectar na base de usuários: {e}", None
+        return False, f"Erro de conexão com o CACTUS: {e}", None
 
 # Gerenciamento da Sessão de Login
 if "autenticado" not in st.session_state:
@@ -164,7 +188,7 @@ if not st.session_state["autenticado"]:
     col_l1, col_l2, col_l3 = st.columns([1, 1.2, 1])
 
     with col_l2:
-        st.write("") # Espaçamento superior
+        st.write("") 
         st.write("")
         with st.form(key="form_login_cactus"):
             st.markdown("""
@@ -197,7 +221,6 @@ if not st.session_state["autenticado"]:
 # ==============================================================================
 if st.session_state["autenticado"]:
     
-    # Barra de Cabeçalho Superior com Dados do Servidor Logado
     col_hdr1, col_hdr2 = st.columns([3, 1])
     with col_hdr1:
         st.markdown(f"""
@@ -413,7 +436,7 @@ if st.session_state["autenticado"]:
                 df_exibicao["status"].str.lower().str.contains(termo_limpo)
             ]
 
-        # Aplicação da Ordenação Forçada
+        # Aplicação da Ordenação
         if not df_exibicao.empty:
             if opcao_ordem == "Data de inserção (mais recente)":
                 df_exibicao["dt_tmp"] = pd.to_datetime(df_exibicao["data_insercao"], format="%d/%m/%Y", errors="coerce")
@@ -499,6 +522,9 @@ if st.session_state["autenticado"]:
                     "🔍 Executar varredura Datajud", type="primary"
                 )
 
+            # ==================================================================
+            # VARREDURA DATAJUD COM TIMEOUT E RETENTATIVA AUTOMÁTICA
+            # ==================================================================
             if executar_varredura:
                 headers = {
                     "Authorization": f"APIKey {API_KEY}",
@@ -506,6 +532,7 @@ if st.session_state["autenticado"]:
                 }
                 alertas = []
                 alteracao_dados = False
+                processos_com_timeout = []
 
                 df_execucao = df_banco.copy()
                 indices_pendentes = df_execucao[
@@ -515,8 +542,13 @@ if st.session_state["autenticado"]:
                 if len(indices_pendentes) == 0:
                     st.info("Não há processos com status 'Pendente' para consultar.")
                 else:
-                    with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."):
-                        for idx in indices_pendentes:
+                    bar_progresso = st.progress(0)
+                    total_proc = len(indices_pendentes)
+
+                    with st.spinner(f"Consultando a API do TJES para {total_proc} processo(s)..."):
+                        for idx_count, idx in enumerate(indices_pendentes):
+                            bar_progresso.progress((idx_count + 1) / total_proc)
+
                             numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
                             ppl = df_execucao.at[idx, "nome_ppl"]
 
@@ -525,57 +557,73 @@ if st.session_state["autenticado"]:
 
                             payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
-                            try:
-                                res = requests.post(URL_API, json=payload, headers=headers, timeout=15)
-                                dados = res.json()
-                                hits = dados.get("hits", {}).get("hits", [])
+                            # Tentativa de consulta com timeout expandido para 35 segundos
+                            res = None
+                            for tentativa in range(2):
+                                try:
+                                    res = requests.post(URL_API, json=payload, headers=headers, timeout=35)
+                                    if res.status_code == 200:
+                                        break
+                                except requests.exceptions.RequestException:
+                                    if tentativa == 1:
+                                        processos_com_timeout.append(f"{ppl} ({numero_limpo})")
 
-                                if hits:
-                                    fonte = hits[0].get("_source", {})
+                            if res and res.status_code == 200:
+                                try:
+                                    dados = res.json()
+                                    hits = dados.get("hits", {}).get("hits", [])
 
-                                    orgao_info = fonte.get("orgaoJulgador", {})
-                                    orgao_nome = ""
-                                    if isinstance(orgao_info, dict):
-                                        orgao_nome = str(orgao_info.get("nome", "")).strip()
+                                    if hits:
+                                        fonte = hits[0].get("_source", {})
 
-                                    if orgao_nome and df_execucao.at[idx, "orgao_julgador"] != orgao_nome:
-                                        df_execucao.at[idx, "orgao_julgador"] = orgao_nome
-                                        alteracao_dados = True
+                                        orgao_info = fonte.get("orgaoJulgador", {})
+                                        orgao_nome = ""
+                                        if isinstance(orgao_info, dict):
+                                            orgao_nome = str(orgao_info.get("nome", "")).strip()
 
-                                    movs = fonte.get("movimentos", [])
-                                    for m in movs:
-                                        cod = m.get("codigo")
-                                        nome_mov = str(m.get("nome", "")).lower()
-                                        data_mov_iso = m.get("dataHora", "")
+                                        if orgao_nome and df_execucao.at[idx, "orgao_julgador"] != orgao_nome:
+                                            df_execucao.at[idx, "orgao_julgador"] = orgao_nome
+                                            alteracao_dados = True
 
-                                        movimento_valido = True
-                                        try:
-                                            data_mandado_str = str(df_execucao.at[idx, "data_mandado"]).strip()
-                                            
-                                            if data_mandado_str and data_mov_iso:
-                                                dt_mandado = datetime.strptime(data_mandado_str, "%d/%m/%Y").date()
-                                                dt_movimento = datetime.strptime(data_mov_iso[:10], "%Y-%m-%d").date()
+                                        movs = fonte.get("movimentos", [])
+                                        for m in movs:
+                                            cod = m.get("codigo")
+                                            nome_mov = str(m.get("nome", "")).lower()
+                                            data_mov_iso = m.get("dataHora", "")
+
+                                            movimento_valido = True
+                                            try:
+                                                data_mandado_str = str(df_execucao.at[idx, "data_mandado"]).strip()
                                                 
-                                                if dt_movimento < dt_mandado:
-                                                    movimento_valido = False
-                                        except Exception:
-                                            pass
+                                                if data_mandado_str and data_mov_iso:
+                                                    dt_mandado = datetime.strptime(data_mandado_str, "%d/%m/%Y").date()
+                                                    dt_movimento = datetime.strptime(data_mov_iso[:10], "%Y-%m-%d").date()
+                                                    
+                                                    if dt_movimento < dt_mandado:
+                                                        movimento_valido = False
+                                            except Exception:
+                                                pass
 
-                                        if movimento_valido:
-                                            if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
-                                                alertas.append({
-                                                    "ppl": ppl,
-                                                    "proc": numero_limpo,
-                                                    "orgao": orgao_nome or "Não informado",
-                                                    "evento": m.get("nome"),
-                                                    "data": m.get("dataHora"),
-                                                })
-                                                break
-                            except Exception as e:
-                                st.error(f"Erro ao consultar o Datajud: {e}")
+                                            if movimento_valido:
+                                                if (cod in CODIGOS_ALVO) or any(t in nome_mov for t in TERMOS_ALVO):
+                                                    alertas.append({
+                                                        "ppl": ppl,
+                                                        "proc": numero_limpo,
+                                                        "orgao": orgao_nome or "Não informado",
+                                                        "evento": m.get("nome"),
+                                                        "data": m.get("dataHora"),
+                                                    })
+                                                    break
+                                except Exception:
+                                    pass
+
+                    bar_progresso.empty()
 
                     if alteracao_dados:
                         salvar_dados_planilha(df_execucao)
+
+                    if processos_com_timeout:
+                        st.warning(f"⚠️ O servidor do Datajud/TJES não respondeu a tempo para {len(processos_com_timeout)} processo(s). A varredura dos demais foi concluída normalmente.")
 
                     if alertas:
                         st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")
