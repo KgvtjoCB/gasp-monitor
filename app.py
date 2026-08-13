@@ -1,10 +1,7 @@
 from datetime import datetime
 import hashlib
 import json
-import os
 import re
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import requests
 import streamlit as st
@@ -43,9 +40,6 @@ TERMOS_ALVO = [
     "concedida a liberdade",
     "revogada a prisão",
 ]
-
-# ID da Planilha do CACTUS onde fica a aba _USUARIOS
-ID_PLANILHA_CACTUS = "1JO6Pr6SZ3ywvBqgV2epQGI2R5D1YUuK_5keY-qZ59l0"
 
 st.set_page_config(
     page_title="Monitor de Restrições - GASP", page_icon="⚖️", layout="wide"
@@ -108,6 +102,19 @@ st.markdown("""
         border-radius: 6px !important;
         border-color: #d1d5db !important;
     }
+
+    /* Header Superior do Usuário */
+    .cactus-header {
+        background-color: #ffffff;
+        padding: 12px 20px;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,43 +127,17 @@ def gerar_hash_sha256(texto):
     """Gera a hash SHA-256 equivalente ao Utilities.computeDigest do GAS"""
     return hashlib.sha256(str(texto).encode('utf-8')).hexdigest()
 
-def conectar_gspread_cactus():
-    """Conecta à planilha do CACTUS usando a mesma Service Account do Secrets"""
-    creds_dict = None
-    if "GCP_SERVICE_ACCOUNT" in st.secrets:
-        creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
-    elif "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-        creds_dict = dict(st.secrets["connections"]["gsheets"])
-
-    if not creds_dict:
-        raise ValueError("Credenciais GCP_SERVICE_ACCOUNT não encontradas nos Secrets.")
-
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    return client.open_by_key(ID_PLANILHA_CACTUS).worksheet("_USUARIOS")
-
 def autenticar_usuario_cactus(email_digitado, senha_digitada):
     try:
-        sheet_usuarios = conectar_gspread_cactus()
-        registros = sheet_usuarios.get_all_records()
-        
-        if not registros:
-            return False, "Base de usuários vazia.", None
-
-        df_usuarios = pd.DataFrame(registros)
-        
-        # Garante tratamento do texto das colunas
-        for col in df_usuarios.columns:
-            df_usuarios[col] = df_usuarios[col].astype(str)
+        # Carrega a aba de usuários do CACTUS
+        df_usuarios = conn.read(worksheet="_USUARIOS", ttl=0, dtype=str)
+        if df_usuarios.empty:
+            return False, "Base de usuários não encontrada.", None
 
         email_limpo = str(email_digitado).strip().lower()
         hash_senha = gerar_hash_sha256(senha_digitada)
 
-        # Procura correspondência de e-mail e hash
+        # Procura correspondência
         usuario_match = df_usuarios[
             (df_usuarios['EMAIL'].str.strip().str.lower() == email_limpo) & 
             (df_usuarios['SENHA_HASH'].str.strip() == hash_senha)
@@ -168,7 +149,7 @@ def autenticar_usuario_cactus(email_digitado, senha_digitada):
         else:
             return False, "E-mail ou senha incorretos.", None
     except Exception as e:
-        return False, f"Erro ao conectar na base do CACTUS: {e}", None
+        return False, f"Erro ao conectar na base de usuários: {e}", None
 
 # Gerenciamento da Sessão de Login
 if "autenticado" not in st.session_state:
@@ -183,7 +164,7 @@ if not st.session_state["autenticado"]:
     col_l1, col_l2, col_l3 = st.columns([1, 1.2, 1])
 
     with col_l2:
-        st.write("") 
+        st.write("") # Espaçamento superior
         st.write("")
         with st.form(key="form_login_cactus"):
             st.markdown("""
@@ -519,51 +500,33 @@ if st.session_state["autenticado"]:
                 )
 
             if executar_varredura:
-            headers = {
-                "Authorization": f"APIKey {API_KEY}",
-                "Content-Type": "application/json",
-            }
-            alertas = []
-            alteracao_dados = False
-            processos_com_erro = []
+                headers = {
+                    "Authorization": f"APIKey {API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                alertas = []
+                alteracao_dados = False
 
-            df_execucao = df_banco.copy()
-            indices_pendentes = df_execucao[
-                df_execucao["status"].str.strip().str.lower() == "pendente"
-            ].index
+                df_execucao = df_banco.copy()
+                indices_pendentes = df_execucao[
+                    df_execucao["status"].str.strip().str.lower() == "pendente"
+                ].index
 
-            if len(indices_pendentes) == 0:
-                st.info("Não há processos com status 'Pendente' para consultar.")
-            else:
-                progress_bar = st.progress(0)
-                total_proc = len(indices_pendentes)
+                if len(indices_pendentes) == 0:
+                    st.info("Não há processos com status 'Pendente' para consultar.")
+                else:
+                    with st.spinner(f"Consultando a API do TJES para {len(indices_pendentes)} processo(s) pendente(s)..."):
+                        for idx in indices_pendentes:
+                            numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
+                            ppl = df_execucao.at[idx, "nome_ppl"]
 
-                with st.spinner(f"Consultando a API do TJES/Datajud para {total_proc} processo(s)..."):
-                    for i, idx in enumerate(indices_pendentes):
-                        # Atualiza barra de progresso visual
-                        progress_bar.progress((i + 1) / total_proc)
+                            if not numero_limpo or len(numero_limpo) != 20:
+                                continue
 
-                        numero_limpo = formatar_numero_processo(df_execucao.at[idx, "processo"])
-                        ppl = df_execucao.at[idx, "nome_ppl"]
+                            payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
 
-                        if not numero_limpo or len(numero_limpo) != 20:
-                            continue
-
-                        payload = {"query": {"term": {"numeroProcesso": numero_limpo}}}
-
-                        # Lógica de tentativa com timeout ampliado para 30s
-                        res = None
-                        for tentativa in range(2): # Tenta até 2 vezes se der timeout
                             try:
-                                res = requests.post(URL_API, json=payload, headers=headers, timeout=30)
-                                if res.status_code == 200:
-                                    break
-                            except requests.exceptions.RequestException:
-                                if tentativa == 1:
-                                    processos_com_erro.append(f"{ppl} ({numero_limpo})")
-
-                        if res and res.status_code == 200:
-                            try:
+                                res = requests.post(URL_API, json=payload, headers=headers, timeout=15)
                                 dados = res.json()
                                 hits = dados.get("hits", {}).get("hits", [])
 
@@ -609,18 +572,14 @@ if st.session_state["autenticado"]:
                                                 })
                                                 break
                             except Exception as e:
-                                pass
+                                st.error(f"Erro ao consultar o Datajud: {e}")
 
-                progress_bar.empty() # Limpa a barra ao finalizar
+                    if alteracao_dados:
+                        salvar_dados_planilha(df_execucao)
 
-                if alteracao_dados:
-                    salvar_dados_planilha(df_execucao)
-
-                if processos_com_erro:
-                    st.warning(f"⚠️ O Datajud esteve instável e não respondeu para {len(processos_com_erro)} processo(s). Os demais foram consultados normalmente.")
-
-                if alertas:
-                    st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")                      
+                    if alertas:
+                        st.error("🚨 Atenção: desimpedimentos detectados no Datajud!")
+                        
                         df_hist_atual = carregar_historico_baixas()
                         novos_registros = []
                         data_hora_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
